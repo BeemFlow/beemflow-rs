@@ -999,18 +999,18 @@ async fn get_oauth_provider_handler(
 ) -> std::result::Result<Json<Value>, AppError> {
     // Check registry first for built-in providers
     let registry_manager = state.registry.get_dependencies().registry_manager.clone();
-    if let Some(entry) = registry_manager.get_server(&id).await? {
-        if entry.entry_type == "oauth_provider" {
-            return Ok(Json(json!({
-                "id": entry.name,
-                "name": entry.display_name.as_ref().unwrap_or(&entry.name),
-                "auth_url": entry.auth_url,
-                "token_url": entry.token_url,
-                "scopes": entry.scopes,
-                "source": "registry",
-                // Don't expose client_id/secret for registry providers
-            })));
-        }
+    if let Some(entry) = registry_manager.get_server(&id).await?
+        && entry.entry_type == "oauth_provider"
+    {
+        return Ok(Json(json!({
+            "id": entry.name,
+            "name": entry.display_name.as_ref().unwrap_or(&entry.name),
+            "auth_url": entry.auth_url,
+            "token_url": entry.token_url,
+            "scopes": entry.scopes,
+            "source": "registry",
+            // Don't expose client_id/secret for registry providers
+        })));
     }
 
     // Fall back to storage for custom providers

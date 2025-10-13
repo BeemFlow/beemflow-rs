@@ -156,10 +156,7 @@ impl DependencyAnalyzer {
         let mut merged = auto;
 
         for (step_id, manual_deps) in manual {
-            merged
-                .entry(step_id)
-                .or_insert_with(HashSet::new)
-                .extend(manual_deps);
+            merged.entry(step_id).or_default().extend(manual_deps);
         }
 
         merged
@@ -424,7 +421,7 @@ mod tests {
     fn test_topological_sort_simple() {
         let analyzer = DependencyAnalyzer::new();
 
-        let mut step_a = create_step("a");
+        let step_a = create_step("a");
         let mut step_b = create_step("b");
         step_b.depends_on = Some(vec!["a".to_string()]);
 

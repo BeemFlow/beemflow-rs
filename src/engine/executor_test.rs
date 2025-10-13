@@ -5,7 +5,6 @@ use crate::engine::Executor;
 use crate::event::EventBus;
 use crate::model::Step;
 use crate::storage::Storage;
-use parking_lot::RwLock;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
