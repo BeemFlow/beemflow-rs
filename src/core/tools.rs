@@ -287,9 +287,7 @@ pub mod tools {
                                                 let mut param_schema = serde_json::Map::new();
                                                 param_schema.insert(
                                                     "type".to_string(),
-                                                    serde_json::Value::String(
-                                                        "string".to_string(),
-                                                    ),
+                                                    serde_json::Value::String("string".to_string()),
                                                 );
 
                                                 if let Some(param_desc) = param_obj

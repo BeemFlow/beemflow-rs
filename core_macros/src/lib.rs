@@ -54,18 +54,15 @@ pub fn operation_group(attr: TokenStream, item: TokenStream) -> TokenStream {
             if let syn::Item::Struct(s) = item {
                 // Check if this struct has a 'deps' field
                 let has_deps_field = if let syn::Fields::Named(fields) = &s.fields {
-                    fields.named.iter().any(|f| {
-                        f.ident.as_ref().map(|i| i == "deps").unwrap_or(false)
-                    })
+                    fields
+                        .named
+                        .iter()
+                        .any(|f| f.ident.as_ref().map(|i| i == "deps").unwrap_or(false))
                 } else {
                     false
                 };
 
-                if has_deps_field {
-                    Some(&s.ident)
-                } else {
-                    None
-                }
+                if has_deps_field { Some(&s.ident) } else { None }
             } else {
                 None
             }

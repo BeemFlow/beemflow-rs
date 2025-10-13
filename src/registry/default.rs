@@ -83,7 +83,11 @@ fn expand_env_value(value: &str) -> String {
                 val
             }
             Err(_) => {
-                tracing::warn!("Environment variable {} not found, keeping placeholder {}", var_name, value);
+                tracing::warn!(
+                    "Environment variable {} not found, keeping placeholder {}",
+                    var_name,
+                    value
+                );
                 value.to_string()
             }
         }

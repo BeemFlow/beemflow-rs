@@ -5,8 +5,8 @@
 //!
 //! For true end-to-end tests that run via CLI, use `make e2e`.
 
+use beemflow::Engine;
 use beemflow::dsl::{Validator, parse_file};
-use beemflow::{Engine};
 use std::collections::HashMap;
 
 /// Helper to create event data with timestamp for deduplication
@@ -25,11 +25,13 @@ fn has_openai_key() -> bool {
 }
 
 fn has_anthropic_key() -> bool {
-    std::env::var("ANTHROPIC_API_KEY").is_ok() && !std::env::var("ANTHROPIC_API_KEY").unwrap().is_empty()
+    std::env::var("ANTHROPIC_API_KEY").is_ok()
+        && !std::env::var("ANTHROPIC_API_KEY").unwrap().is_empty()
 }
 
 fn has_airtable_key() -> bool {
-    std::env::var("AIRTABLE_API_KEY").is_ok() && !std::env::var("AIRTABLE_API_KEY").unwrap().is_empty()
+    std::env::var("AIRTABLE_API_KEY").is_ok()
+        && !std::env::var("AIRTABLE_API_KEY").unwrap().is_empty()
 }
 
 // ============================================================================
@@ -51,15 +53,17 @@ async fn test_e2e_fetch_and_summarize() {
     let engine = Engine::default();
     let result = engine.execute(&flow, create_test_event()).await;
 
-    assert!(
-        result.is_ok(),
-        "Flow execution failed: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
 
     let outputs = result.unwrap().outputs;
-    assert!(outputs.contains_key("fetch_page"), "Missing fetch_page output");
-    assert!(outputs.contains_key("summarize"), "Missing summarize output");
+    assert!(
+        outputs.contains_key("fetch_page"),
+        "Missing fetch_page output"
+    );
+    assert!(
+        outputs.contains_key("summarize"),
+        "Missing summarize output"
+    );
     assert!(outputs.contains_key("print"), "Missing print output");
 }
 
@@ -78,11 +82,7 @@ async fn test_e2e_parallel_openai() {
     let engine = Engine::default();
     let result = engine.execute(&flow, create_test_event()).await;
 
-    assert!(
-        result.is_ok(),
-        "Flow execution failed: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
 
     let outputs = result.unwrap().outputs;
     assert!(outputs.contains_key("chat1"), "Missing chat1 output");
@@ -108,7 +108,10 @@ async fn test_e2e_airtable_integration() {
     // Note: This might fail if MCP server is not properly configured
     // We just verify it parses and validates correctly
     if result.is_err() {
-        eprintln!("⚠️  Airtable flow failed (expected if MCP server not configured): {:?}", result.err());
+        eprintln!(
+            "⚠️  Airtable flow failed (expected if MCP server not configured): {:?}",
+            result.err()
+        );
     }
 }
 
@@ -131,19 +134,33 @@ async fn test_integration_http_patterns() {
     let engine = Engine::default();
     let result = engine.execute(&flow, create_test_event()).await;
 
-    assert!(
-        result.is_ok(),
-        "Flow execution failed: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
 
     let outputs = result.unwrap().outputs;
-    assert!(outputs.contains_key("test_http_fetch"), "Missing test_http_fetch");
-    assert!(outputs.contains_key("test_generic_http"), "Missing test_generic_http");
-    assert!(outputs.contains_key("test_openai_manifest"), "Missing test_openai_manifest");
-    assert!(outputs.contains_key("test_anthropic_manifest"), "Missing test_anthropic_manifest");
-    assert!(outputs.contains_key("test_http_post"), "Missing test_http_post");
-    assert!(outputs.contains_key("verify_results"), "Missing verify_results");
+    assert!(
+        outputs.contains_key("test_http_fetch"),
+        "Missing test_http_fetch"
+    );
+    assert!(
+        outputs.contains_key("test_generic_http"),
+        "Missing test_generic_http"
+    );
+    assert!(
+        outputs.contains_key("test_openai_manifest"),
+        "Missing test_openai_manifest"
+    );
+    assert!(
+        outputs.contains_key("test_anthropic_manifest"),
+        "Missing test_anthropic_manifest"
+    );
+    assert!(
+        outputs.contains_key("test_http_post"),
+        "Missing test_http_post"
+    );
+    assert!(
+        outputs.contains_key("verify_results"),
+        "Missing verify_results"
+    );
 }
 
 #[tokio::test]
@@ -156,11 +173,7 @@ async fn test_integration_simple_parallel() {
     let engine = Engine::default();
     let result = engine.execute(&flow, create_test_event()).await;
 
-    assert!(
-        result.is_ok(),
-        "Flow execution failed: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
 }
 
 #[tokio::test]
@@ -173,11 +186,7 @@ async fn test_integration_nested_parallel() {
     let engine = Engine::default();
     let result = engine.execute(&flow, create_test_event()).await;
 
-    assert!(
-        result.is_ok(),
-        "Flow execution failed: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
 }
 
 #[tokio::test]
@@ -190,11 +199,7 @@ async fn test_integration_templating_system() {
     let engine = Engine::default();
     let result = engine.execute(&flow, create_test_event()).await;
 
-    assert!(
-        result.is_ok(),
-        "Flow execution failed: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
 }
 
 // ============================================================================
@@ -211,11 +216,7 @@ async fn test_example_hello_world() {
     let engine = Engine::default();
     let result = engine.execute(&flow, create_test_event()).await;
 
-    assert!(
-        result.is_ok(),
-        "Flow execution failed: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
 
     let outputs = result.unwrap().outputs;
     assert!(outputs.contains_key("greet"), "Missing greet output");
@@ -229,7 +230,6 @@ fn test_all_flows_parse_and_validate() {
         "flows/e2e/fetch_and_summarize.flow.yaml",
         "flows/e2e/parallel_openai.flow.yaml",
         "flows/e2e/airtable_integration.flow.yaml",
-
         // Integration flows
         "flows/integration/http_patterns.flow.yaml",
         "flows/integration/simple_parallel.flow.yaml",
@@ -240,7 +240,6 @@ fn test_all_flows_parse_and_validate() {
         "flows/integration/spec_compliance_test.flow.yaml",
         "flows/integration/edge_cases.flow.yaml",
         "flows/integration/performance.flow.yaml",
-
         // Example flows
         "flows/examples/hello_world.flow.yaml",
         "flows/examples/memory_demo.flow.yaml",

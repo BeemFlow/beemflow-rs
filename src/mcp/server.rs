@@ -9,9 +9,8 @@ use rmcp::{
     ErrorData as McpError,
     handler::server::ServerHandler,
     model::{
-        CallToolRequestParam, CallToolResult, Content, ServerCapabilities,
-        ServerInfo, Tool, ToolsCapability,
-        ListToolsResult, PaginatedRequestParam,
+        CallToolRequestParam, CallToolResult, Content, ListToolsResult, PaginatedRequestParam,
+        ServerCapabilities, ServerInfo, Tool, ToolsCapability,
     },
     service::{RequestContext, RoleServer, ServiceExt},
 };
@@ -35,13 +34,16 @@ impl McpServer {
         tracing::info!("Starting MCP server on stdio using official rmcp SDK");
 
         // Use official SDK's stdio transport and serve
-        let service = self.clone()
+        let service = self
+            .clone()
             .serve(rmcp::transport::io::stdio())
             .await
             .map_err(|e| anyhow::anyhow!("Failed to start MCP server: {}", e))?;
 
         // Wait for completion
-        service.waiting().await
+        service
+            .waiting()
+            .await
             .map_err(|e| anyhow::anyhow!("MCP server error: {}", e))?;
 
         tracing::info!("MCP server shutdown");
@@ -84,7 +86,6 @@ impl McpServer {
         );
         tools
     }
-
 }
 
 impl Clone for McpServer {
@@ -136,8 +137,8 @@ impl ServerHandler for McpServer {
         // Execute operation via registry
         match self.operations.execute(operation_name, arguments).await {
             Ok(result) => {
-                let result_text = serde_json::to_string_pretty(&result)
-                    .unwrap_or_else(|_| "{}".to_string());
+                let result_text =
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string());
 
                 Ok(CallToolResult::success(vec![Content::text(result_text)]))
             }

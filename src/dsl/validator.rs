@@ -42,7 +42,7 @@ impl Validator {
         Self::validate_required_fields(flow)?;
         Self::validate_step_ids_unique(flow)?;
         Self::validate_dependencies(flow)?;
-        Self::detect_circular_dependencies(flow)?;  // Detect cycles in dependency graph
+        Self::detect_circular_dependencies(flow)?; // Detect cycles in dependency graph
         Self::validate_step_constraints(flow)?;
         Self::validate_nested_steps(flow)?;
         Ok(())

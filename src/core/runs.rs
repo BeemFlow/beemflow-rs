@@ -118,11 +118,7 @@ pub mod runs {
 
             // Fetch step execution details
             let steps = self.deps.storage.get_steps(run_id).await?;
-            run.steps = if steps.is_empty() {
-                None
-            } else {
-                Some(steps)
-            };
+            run.steps = if steps.is_empty() { None } else { Some(steps) };
 
             Ok(serde_json::to_value(run)?)
         }

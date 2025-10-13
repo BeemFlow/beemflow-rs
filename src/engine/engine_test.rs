@@ -105,7 +105,11 @@ async fn test_execute_empty_steps() {
 
     let result = engine.execute(&flow, HashMap::new()).await;
     assert!(result.is_ok(), "Flow with empty steps should succeed");
-    assert_eq!(result.unwrap().outputs.len(), 0, "Should return empty outputs");
+    assert_eq!(
+        result.unwrap().outputs.len(),
+        0,
+        "Should return empty outputs"
+    );
 }
 
 #[tokio::test]
@@ -411,7 +415,8 @@ async fn test_execute_secrets_dot_access() {
 
     let outputs = result.unwrap();
     let text = outputs
-        .outputs.get("s1")
+        .outputs
+        .get("s1")
         .unwrap()
         .get("text")
         .unwrap()
@@ -466,7 +471,8 @@ async fn test_execute_array_access_in_template() {
 
     let outputs = result.unwrap();
     let text = outputs
-        .outputs.get("s1")
+        .outputs
+        .get("s1")
         .unwrap()
         .get("text")
         .unwrap()
@@ -547,7 +553,8 @@ async fn test_environment_variables_in_templates() {
 
     let outputs = result.unwrap();
     let text = outputs
-        .outputs.get("test_env")
+        .outputs
+        .get("test_env")
         .unwrap()
         .get("text")
         .unwrap()

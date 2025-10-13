@@ -68,11 +68,8 @@ impl Executor {
         let sorted_ids = analyzer.topological_sort(flow)?;
 
         // Create lookup map for steps
-        let step_map: HashMap<String, &Step> = flow
-            .steps
-            .iter()
-            .map(|s| (s.id.clone(), s))
-            .collect();
+        let step_map: HashMap<String, &Step> =
+            flow.steps.iter().map(|s| (s.id.clone(), s)).collect();
 
         // Determine which step to start from
         // For fresh runs (start_idx=0), execute all steps in sorted order

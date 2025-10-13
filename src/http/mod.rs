@@ -135,8 +135,7 @@ pub async fn start_server(config: Config) -> Result<()> {
     // Create OAuth client manager
     let redirect_uri = format!(
         "http://{}:{}/oauth/callback",
-        http_config.host,
-        http_config.port
+        http_config.host, http_config.port
     );
     let oauth_client = Arc::new(crate::auth::OAuthClientManager::new(
         dependencies.storage.clone(),
@@ -498,7 +497,10 @@ async fn oauth_providers_handler(State(state): State<AppState>) -> impl IntoResp
         "providers": provider_data
     });
 
-    match state.template_renderer.render_json("providers", &template_data) {
+    match state
+        .template_renderer
+        .render_json("providers", &template_data)
+    {
         Ok(html) => Html(html),
         Err(e) => {
             tracing::error!("Failed to render providers template: {}", e);
@@ -599,7 +601,7 @@ async fn oauth_callback_handler(
 </html>"#,
                 ),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -619,7 +621,7 @@ async fn oauth_callback_handler(
 </html>"#,
                 ),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -771,7 +773,11 @@ async fn oauth_callback_handler(
         }
     };
 
-    let provider_id = match session.data.get("oauth_provider_id").and_then(|v| v.as_str()) {
+    let provider_id = match session
+        .data
+        .get("oauth_provider_id")
+        .and_then(|v| v.as_str())
+    {
         Some(p) => p,
         None => {
             tracing::error!("No provider_id found in session");

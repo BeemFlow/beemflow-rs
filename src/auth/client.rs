@@ -9,9 +9,9 @@ use crate::storage::Storage;
 use crate::{BeemFlowError, Result};
 use chrono::{Duration, Utc};
 use oauth2::{
-    basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope, TokenResponse,
-    TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
+    basic::BasicClient,
 };
 use std::sync::Arc;
 use uuid::Uuid;
@@ -65,19 +65,35 @@ impl OAuthClientManager {
     /// then falls back to storage for custom user-created providers.
     async fn get_provider(&self, provider_id: &str) -> Result<ProviderConfig> {
         // Try registry first (default providers with $env: variables expanded)
-        if let Some(entry) = self.registry_manager.get_oauth_provider(provider_id).await? {
+        if let Some(entry) = self
+            .registry_manager
+            .get_oauth_provider(provider_id)
+            .await?
+        {
             return Ok(ProviderConfig {
                 client_id: entry.client_id.ok_or_else(|| {
-                    BeemFlowError::auth(format!("OAuth provider '{}' missing client_id", provider_id))
+                    BeemFlowError::auth(format!(
+                        "OAuth provider '{}' missing client_id",
+                        provider_id
+                    ))
                 })?,
                 client_secret: entry.client_secret.ok_or_else(|| {
-                    BeemFlowError::auth(format!("OAuth provider '{}' missing client_secret", provider_id))
+                    BeemFlowError::auth(format!(
+                        "OAuth provider '{}' missing client_secret",
+                        provider_id
+                    ))
                 })?,
                 auth_url: entry.auth_url.ok_or_else(|| {
-                    BeemFlowError::auth(format!("OAuth provider '{}' missing auth_url", provider_id))
+                    BeemFlowError::auth(format!(
+                        "OAuth provider '{}' missing auth_url",
+                        provider_id
+                    ))
                 })?,
                 token_url: entry.token_url.ok_or_else(|| {
-                    BeemFlowError::auth(format!("OAuth provider '{}' missing token_url", provider_id))
+                    BeemFlowError::auth(format!(
+                        "OAuth provider '{}' missing token_url",
+                        provider_id
+                    ))
                 })?,
             });
         }
@@ -88,7 +104,10 @@ impl OAuthClientManager {
             .get_oauth_provider(provider_id)
             .await?
             .ok_or_else(|| {
-                BeemFlowError::auth(format!("OAuth provider '{}' not found in registry or storage", provider_id))
+                BeemFlowError::auth(format!(
+                    "OAuth provider '{}' not found in registry or storage",
+                    provider_id
+                ))
             })?;
 
         Ok(ProviderConfig {
@@ -196,19 +215,15 @@ impl OAuthClientManager {
             provider: provider_id.to_string(),
             integration: integration.to_string(),
             access_token: token_result.access_token().secret().clone(),
-            refresh_token: token_result
-                .refresh_token()
-                .map(|t| t.secret().clone()),
+            refresh_token: token_result.refresh_token().map(|t| t.secret().clone()),
             expires_at,
-            scope: token_result
-                .scopes()
-                .map(|scopes| {
-                    scopes
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                }),
+            scope: token_result.scopes().map(|scopes| {
+                scopes
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }),
             created_at: now,
             updated_at: now,
         };
@@ -233,12 +248,15 @@ impl OAuthClientManager {
     /// ```no_run
     /// use beemflow::auth::OAuthClientManager;
     /// use beemflow::storage::MemoryStorage;
+    /// use beemflow::registry::RegistryManager;
     /// use std::sync::Arc;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let storage = Arc::new(MemoryStorage::new());
+    /// let registry_manager = Arc::new(RegistryManager::standard(None));
     /// let client = OAuthClientManager::new(
     ///     storage,
+    ///     registry_manager,
     ///     "http://localhost:3000/oauth/callback".to_string()
     /// );
     ///

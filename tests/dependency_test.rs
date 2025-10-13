@@ -6,8 +6,8 @@
 //! 3. Complex dependency graphs validate correctly
 //! 4. Invalid dependencies (referencing non-existent steps) are caught
 
-use beemflow::dsl::{parse_file, Validator};
 use beemflow::Engine;
+use beemflow::dsl::{Validator, parse_file};
 use std::collections::HashMap;
 
 /// Helper to create event data with timestamp
@@ -24,10 +24,7 @@ fn create_test_event() -> HashMap<String, serde_json::Value> {
 fn test_circular_dependency_detected() {
     let flow = parse_file("flows/integration/circular_dependencies.flow.yaml");
 
-    assert!(
-        flow.is_ok(),
-        "Flow should parse successfully"
-    );
+    assert!(flow.is_ok(), "Flow should parse successfully");
 
     let flow = flow.unwrap();
     let validation_result = Validator::validate(&flow);

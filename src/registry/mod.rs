@@ -98,7 +98,11 @@ pub struct RegistryEntry {
     pub client_secret: Option<String>,
 
     /// OAuth auth URL (for oauth_provider)
-    #[serde(skip_serializing_if = "Option::is_none", alias = "authUrl", alias = "authorization_url")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "authUrl",
+        alias = "authorization_url"
+    )]
     pub auth_url: Option<String>,
 
     /// OAuth token URL (for oauth_provider)

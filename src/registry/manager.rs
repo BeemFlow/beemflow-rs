@@ -179,19 +179,30 @@ impl RegistryManager {
 
         if let Some(entry) = self.get_server(name).await? {
             let has_client_id = entry.client_id.is_some();
-            tracing::debug!("Found server entry for '{}': type={}, has_client_id={}",
-                name, entry.entry_type, has_client_id);
+            tracing::debug!(
+                "Found server entry for '{}': type={}, has_client_id={}",
+                name,
+                entry.entry_type,
+                has_client_id
+            );
 
             if entry.entry_type == "oauth_provider" {
                 tracing::debug!("Entry is oauth_provider, expanding env vars for '{}'", name);
                 let expanded = super::default::expand_oauth_provider_env_vars(entry);
                 let has_expanded_client_id = expanded.client_id.is_some();
                 let has_expanded_client_secret = expanded.client_secret.is_some();
-                tracing::debug!("After expansion: has_client_id={}, has_client_secret={}",
-                    has_expanded_client_id, has_expanded_client_secret);
+                tracing::debug!(
+                    "After expansion: has_client_id={}, has_client_secret={}",
+                    has_expanded_client_id,
+                    has_expanded_client_secret
+                );
                 return Ok(Some(expanded));
             } else {
-                tracing::warn!("Entry '{}' is not an oauth_provider (type={})", name, entry.entry_type);
+                tracing::warn!(
+                    "Entry '{}' is not an oauth_provider (type={})",
+                    name,
+                    entry.entry_type
+                );
             }
         } else {
             tracing::warn!("No server entry found for '{}'", name);

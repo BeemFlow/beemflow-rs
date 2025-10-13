@@ -33,8 +33,9 @@ impl DependencyAnalyzer {
             // - {{ steps['foo'] }}
             // - {{ steps["foo"] }}
             step_ref_regex: Regex::new(
-                r#"steps\.([a-zA-Z0-9_-]+)|steps\['([^']+)'\]|steps\["([^"]+)"\]"#
-            ).expect("step reference regex is valid"),
+                r#"steps\.([a-zA-Z0-9_-]+)|steps\['([^']+)'\]|steps\["([^"]+)"\]"#,
+            )
+            .expect("step reference regex is valid"),
         }
     }
 
@@ -476,7 +477,12 @@ mod tests {
 
         let result = analyzer.topological_sort(&flow);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Circular dependency"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Circular dependency")
+        );
     }
 
     #[test]
@@ -494,10 +500,12 @@ mod tests {
 
         let result = analyzer.topological_sort(&flow);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("non-existent step"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("non-existent step")
+        );
     }
 
     #[test]
@@ -509,12 +517,15 @@ mod tests {
         let mut step_b = create_step("step_b");
         let mut with = HashMap::new();
         // This should auto-detect dependency on step_a
-        with.insert("text".to_string(), json!("Result: {{ steps.step_a.output }}"));
+        with.insert(
+            "text".to_string(),
+            json!("Result: {{ steps.step_a.output }}"),
+        );
         step_b.with = Some(with);
 
         let flow = Flow {
             name: "test".to_string(),
-            steps: vec![step_b, step_a],  // Intentionally reversed
+            steps: vec![step_b, step_a], // Intentionally reversed
             ..Default::default()
         };
 
@@ -522,10 +533,17 @@ mod tests {
         println!("Graph: {:?}", graph);
 
         let deps_b = graph.get("step_b").unwrap();
-        assert!(deps_b.contains("step_a"), "step_b should depend on step_a from template");
+        assert!(
+            deps_b.contains("step_a"),
+            "step_b should depend on step_a from template"
+        );
 
         let sorted = analyzer.topological_sort(&flow).unwrap();
         println!("Sorted: {:?}", sorted);
-        assert_eq!(sorted, vec!["step_a", "step_b"], "step_a should run before step_b");
+        assert_eq!(
+            sorted,
+            vec!["step_a", "step_b"],
+            "step_a should run before step_b"
+        );
     }
 }

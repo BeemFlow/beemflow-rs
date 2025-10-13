@@ -74,9 +74,9 @@ impl TemplateRenderer {
             .get(name)
             .ok_or_else(|| BeemFlowError::config(format!("Template '{}' not found", name)))?;
 
-        self.env
-            .render_str(template_content, data)
-            .map_err(|e| BeemFlowError::config(format!("Failed to render template '{}': {}", name, e)))
+        self.env.render_str(template_content, data).map_err(|e| {
+            BeemFlowError::config(format!("Failed to render template '{}': {}", name, e))
+        })
     }
 }
 

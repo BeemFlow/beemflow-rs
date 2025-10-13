@@ -227,10 +227,7 @@ impl Engine {
         // Finalize execution and return result with run_id
         let outputs = self.finalize_execution(flow, event, result, run_id).await?;
 
-        Ok(ExecutionResult {
-            run_id,
-            outputs,
-        })
+        Ok(ExecutionResult { run_id, outputs })
     }
 
     /// Resume a paused run
@@ -347,8 +344,7 @@ impl Engine {
             );
             return Err(crate::BeemFlowError::validation(format!(
                 "Duplicate run detected for flow '{}' (run_id: {}). A run with the same event data was already executed within the current time window.",
-                flow.name,
-                run_id
+                flow.name, run_id
             )));
         }
 
