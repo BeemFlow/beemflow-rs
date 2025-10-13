@@ -1,0 +1,3 @@
+-- PostgreSQL-specific enhancements
+-- Add any PostgreSQL-specific optimizations here in the future
+-- For now, this maintains parity with SQLite migration tracking

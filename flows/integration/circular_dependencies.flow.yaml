@@ -1,0 +1,20 @@
+# Integration test: Circular dependency detection
+# This flow should FAIL validation with a circular dependency error
+
+name: circular_dependencies_test
+on: cli.manual
+
+steps:
+  - id: step_a
+    use: core.log
+    with:
+      message: "Step A"
+    depends_on:
+      - step_b
+
+  - id: step_b
+    use: core.log
+    with:
+      message: "Step B"
+    depends_on:
+      - step_a

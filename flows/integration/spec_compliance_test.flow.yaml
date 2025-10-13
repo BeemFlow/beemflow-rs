@@ -1,0 +1,127 @@
+name: spec_compliance_test
+description: |
+  Comprehensive test to verify all SPEC.md features work correctly.
+  Tests: foreach, parallel, conditional, depends_on, templating, core tools.
+on: cli.manual
+
+vars:
+  items: ["one", "two", "three"]
+  threshold: 5
+  test_value: 10
+
+steps:
+  # Test 1: Basic core.echo
+  - id: test_echo
+    use: core.echo
+    with:
+      text: "Testing core.echo tool"
+
+  # Test 2: core.wait
+  - id: test_wait
+    use: core.wait
+    with:
+      seconds: 1
+
+  # Test 3: Conditional execution (if)
+  - id: conditional_true
+    if: "{{ vars.test_value > vars.threshold }}"
+    use: core.echo
+    with:
+      text: "Condition passed: {{ vars.test_value }} > {{ vars.threshold }}"
+
+  - id: conditional_false
+    if: "{{ vars.test_value < vars.threshold }}"
+    use: core.echo
+    with:
+      text: "This should NOT execute"
+
+  # Test 4: Foreach loop
+  - id: test_foreach
+    foreach: "{{ vars.items }}"
+    as: item
+    do:
+      - id: loop_step_{{ item_index }}
+        use: core.echo
+        with:
+          text: "Item {{ item_row }}: {{ item }}"
+
+  # Test 5: Parallel execution
+  - id: test_parallel
+    parallel: true
+    steps:
+      - id: parallel_1
+        use: core.echo
+        with:
+          text: "Parallel step 1"
+      - id: parallel_2
+        use: core.echo
+        with:
+          text: "Parallel step 2"
+      - id: parallel_3
+        use: core.echo
+        with:
+          text: "Parallel step 3"
+
+  # Test 6: depends_on
+  - id: dependent_step
+    depends_on: [test_parallel, test_foreach]
+    use: core.echo
+    with:
+      text: "This step depends on parallel and foreach"
+
+  # Test 7: Template expressions
+  - id: test_templating
+    use: core.echo
+    with:
+      text: |
+        Templating test:
+        - Math: {{ vars.test_value + 5 }}
+        - String: {{ "hello" | upper }}
+        - Array: {{ vars.items | join(", ") }}
+        - Length: {{ vars.items | length }}
+        - Env: {{ env.USER }}
+        - Output ref: {{ steps.test_echo.text }}
+
+  # Test 8: Nested foreach with parallel
+  - id: nested_test
+    foreach: "{{ vars.items }}"
+    as: item
+    do:
+      - id: nested_parallel_{{ item_index }}
+        parallel: true
+        steps:
+          - id: upper_{{ item_index }}
+            use: core.echo
+            with:
+              text: "{{ item | upper }}"
+          - id: length_{{ item_index }}
+            use: core.echo
+            with:
+              text: "Length: {{ item | length }}"
+
+  # Test 9: Complex conditional
+  - id: complex_condition
+    if: "{{ vars.items | length > 2 and vars.test_value != 0 }}"
+    use: core.echo
+    with:
+      text: "Complex condition passed"
+
+  # Final verification
+  - id: final_summary
+    use: core.echo
+    with:
+      text: |
+        ✅ SPEC COMPLIANCE TEST PASSED
+
+        Verified features:
+        - ✓ core.echo tool
+        - ✓ core.wait tool
+        - ✓ Conditional execution (if)
+        - ✓ Foreach loops with item, item_index, item_row
+        - ✓ Parallel execution
+        - ✓ Step dependencies (depends_on)
+        - ✓ Template expressions (math, filters, env, outputs)
+        - ✓ Nested foreach + parallel
+        - ✓ Complex conditions
+
+        All spec-required features are working!

@@ -1,0 +1,1878 @@
+[
+  {
+    "type": "tool",
+    "name": "http.fetch",
+    "description": "Fetches a URL via HTTP GET and returns the response body as text.",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The URL to fetch."
+        }
+      }
+    }
+  },
+  {
+    "type": "tool",
+    "name": "openai.chat_completion",
+    "description": "Call OpenAI's Chat Completions API (v1/chat/completions) for LLM and function-calling tasks.",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "model",
+        "messages"
+      ],
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "The OpenAI model to use (e.g., gpt-4o)."
+        },
+        "messages": {
+          "type": "array",
+          "description": "Chat messages following the OpenAI spec.",
+          "items": {
+            "type": "object",
+            "required": [
+              "role",
+              "content"
+            ],
+            "properties": {
+              "role": {
+                "type": "string",
+                "enum": [
+                  "system",
+                  "user",
+                  "assistant",
+                  "tool"
+                ]
+              },
+              "content": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "tool_call_id": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 1
+        },
+        "stream": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "endpoint": "https://api.openai.com/v1/chat/completions",
+    "method": "POST",
+    "headers": {
+      "Authorization": "Bearer $env:OPENAI_API_KEY",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "anthropic.chat_completion",
+    "description": "Call Anthropic's Claude models via OpenAI-compatible API.",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "model",
+        "messages"
+      ],
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "Claude model name (e.g., claude-3-7-sonnet-20250219)"
+        },
+        "system": {
+          "type": "string",
+          "description": "System prompt to set context and behavior"
+        },
+        "messages": {
+          "type": "array",
+          "description": "Chat messages following the OpenAI spec.",
+          "items": {
+            "type": "object",
+            "required": [
+              "role",
+              "content"
+            ],
+            "properties": {
+              "role": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "assistant",
+                  "tool"
+                ]
+              },
+              "content": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "tool_call_id": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "max_tokens": {
+          "type": "integer",
+          "description": "Maximum number of tokens to generate.",
+          "default": 1024
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 1
+        },
+        "top_p": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 1
+        }
+      }
+    },
+    "endpoint": "https://api.anthropic.com/v1/messages",
+    "method": "POST",
+    "headers": {
+      "x-api-key": "$env:ANTHROPIC_API_KEY",
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "google_drive.files.list",
+    "description": "List files in Google Drive, with optional folder filtering and search queries",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "q": {
+          "type": "string",
+          "description": "Query for searching files (e.g., 'parents in \"FOLDER_ID\"' to list files in a folder)"
+        },
+        "pageSize": {
+          "type": "integer",
+          "description": "Maximum number of files to return",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "pageToken": {
+          "type": "string",
+          "description": "Token for retrieving next page of results"
+        },
+        "orderBy": {
+          "type": "string",
+          "description": "Sort order (e.g., 'createdTime desc', 'modifiedTime', 'name')"
+        },
+        "fields": {
+          "type": "string",
+          "description": "Fields to include in response",
+          "default": "nextPageToken,files(id,name,mimeType,parents,createdTime,modifiedTime,size,webViewLink)"
+        }
+      }
+    },
+    "endpoint": "https://www.googleapis.com/drive/v3/files",
+    "method": "GET",
+    "headers": {
+      "Authorization": "$oauth:google:sheets_default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "google_sheets.values.get",
+    "description": "Get values from a range in a Google Sheets spreadsheet",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "spreadsheetId",
+        "range"
+      ],
+      "properties": {
+        "spreadsheetId": {
+          "type": "string",
+          "description": "ID of the spreadsheet"
+        },
+        "range": {
+          "type": "string",
+          "description": "A1 notation range (e.g., 'Sheet1!A1:D10' or 'A:D')"
+        },
+        "majorDimension": {
+          "type": "string",
+          "description": "Major dimension for returned values",
+          "enum": [
+            "ROWS",
+            "COLUMNS"
+          ],
+          "default": "ROWS"
+        },
+        "valueRenderOption": {
+          "type": "string",
+          "description": "How values should be represented",
+          "enum": [
+            "FORMATTED_VALUE",
+            "UNFORMATTED_VALUE",
+            "FORMULA"
+          ],
+          "default": "FORMATTED_VALUE"
+        }
+      }
+    },
+    "endpoint": "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/{range}",
+    "method": "GET",
+    "headers": {
+      "Authorization": "$oauth:google:sheets_default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "google_sheets.values.update",
+    "description": "Update values in a range of a Google Sheets spreadsheet",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "spreadsheetId",
+        "range",
+        "values"
+      ],
+      "properties": {
+        "spreadsheetId": {
+          "type": "string",
+          "description": "ID of the spreadsheet"
+        },
+        "range": {
+          "type": "string",
+          "description": "A1 notation range to update (e.g., 'Sheet1!A1:D10')"
+        },
+        "values": {
+          "type": "array",
+          "description": "2D array of values to write",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "endpoint": "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/{range}?valueInputOption=USER_ENTERED",
+    "method": "PUT",
+    "headers": {
+      "Authorization": "$oauth:google:sheets_default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "google_sheets.values.append",
+    "description": "Append values to a Google Sheets spreadsheet",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "spreadsheetId",
+        "range",
+        "values"
+      ],
+      "properties": {
+        "spreadsheetId": {
+          "type": "string",
+          "description": "ID of the spreadsheet"
+        },
+        "range": {
+          "type": "string",
+          "description": "A1 notation range to append to (e.g., 'Sheet1!A:D')"
+        },
+        "values": {
+          "type": "array",
+          "description": "2D array of values to append",
+          "items": {
+            "type": "array"
+          }
+        }
+      }
+    },
+    "endpoint": "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/{range}:append?valueInputOption=USER_ENTERED",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:google:sheets_default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "x.post",
+    "description": "Post a tweet to X (Twitter) via the API v2",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The text content of the tweet",
+          "maxLength": 280
+        },
+        "media_ids": {
+          "type": "array",
+          "description": "Array of media IDs to attach to the tweet",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "endpoint": "https://api.twitter.com/2/tweets",
+    "method": "POST",
+    "headers": {
+      "Authorization": "Bearer $env:X_BEARER_TOKEN",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "mcp_server",
+    "name": "airtable",
+    "description": "Airtable integration via MCP protocol for database operations.",
+    "command": "npx",
+    "args": [
+      "-y",
+      "airtable-mcp-server"
+    ],
+    "version": "0.1.0",
+    "registry": "default",
+    "env": {
+      "AIRTABLE_API_KEY": "$env:AIRTABLE_API_KEY"
+    },
+    "transport": "stdio"
+  },
+  {
+    "type": "tool",
+    "name": "google_sheets.create",
+    "description": "Create a new Google Sheets spreadsheet",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "properties"
+      ],
+      "properties": {
+        "properties": {
+          "type": "object",
+          "required": [
+            "title"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Title of the new spreadsheet"
+            }
+          }
+        }
+      }
+    },
+    "endpoint": "https://sheets.googleapis.com/v4/spreadsheets",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:google:sheets_default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "oauth_provider",
+    "name": "google",
+    "display_name": "Google",
+    "description": "Connect to Google services including Drive, Sheets, Calendar, Gmail, and more",
+    "icon": "🇬",
+    "authorization_url": "https://accounts.google.com/o/oauth2/auth",
+    "token_url": "https://oauth2.googleapis.com/token",
+    "scopes": [
+      "https://www.googleapis.com/auth/spreadsheets",
+      "https://www.googleapis.com/auth/drive",
+      "https://www.googleapis.com/auth/drive.file",
+      "https://www.googleapis.com/auth/calendar",
+      "https://www.googleapis.com/auth/calendar.readonly",
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/docs",
+      "https://www.googleapis.com/auth/docs.readonly",
+      "https://www.googleapis.com/auth/presentations",
+      "https://www.googleapis.com/auth/presentations.readonly",
+      "https://www.googleapis.com/auth/youtube.readonly",
+      "https://www.googleapis.com/auth/contacts.readonly",
+      "https://www.googleapis.com/auth/userinfo.profile",
+      "https://www.googleapis.com/auth/userinfo.email"
+    ],
+    "scope_descriptions": {
+      "https://www.googleapis.com/auth/spreadsheets": "Read and write Google Sheets spreadsheets",
+      "https://www.googleapis.com/auth/drive": "Full access to Google Drive files and folders",
+      "https://www.googleapis.com/auth/drive.file": "Access only to files created by this app in Google Drive",
+      "https://www.googleapis.com/auth/calendar": "Read and write Google Calendar events",
+      "https://www.googleapis.com/auth/calendar.readonly": "Read Google Calendar events (read-only)",
+      "https://www.googleapis.com/auth/gmail.readonly": "Read Gmail messages and settings",
+      "https://www.googleapis.com/auth/gmail.send": "Send emails through Gmail",
+      "https://www.googleapis.com/auth/gmail.modify": "Modify Gmail messages (archive, delete, etc.)",
+      "https://www.googleapis.com/auth/docs": "Read and write Google Docs documents",
+      "https://www.googleapis.com/auth/docs.readonly": "Read Google Docs documents (read-only)",
+      "https://www.googleapis.com/auth/presentations": "Read and write Google Slides presentations",
+      "https://www.googleapis.com/auth/presentations.readonly": "Read Google Slides presentations (read-only)",
+      "https://www.googleapis.com/auth/youtube.readonly": "Read YouTube channel and video information",
+      "https://www.googleapis.com/auth/contacts.readonly": "Read Google Contacts",
+      "https://www.googleapis.com/auth/userinfo.profile": "Access basic profile information",
+      "https://www.googleapis.com/auth/userinfo.email": "Access email address"
+    },
+    "required_scopes": [
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/userinfo.profile"
+    ],
+    "client_id": "$env:GOOGLE_CLIENT_ID",
+    "client_secret": "$env:GOOGLE_CLIENT_SECRET"
+  },
+  {
+    "type": "oauth_provider",
+    "name": "github",
+    "display_name": "GitHub",
+    "description": "Access repositories, issues, pull requests, and GitHub features",
+    "icon": "🐙",
+    "authorization_url": "https://github.com/login/oauth/authorize",
+    "token_url": "https://github.com/login/oauth/access_token",
+    "scopes": [
+      "repo",
+      "repo:status",
+      "repo_deployment",
+      "public_repo",
+      "repo:invite",
+      "security_events",
+      "admin:repo_hook",
+      "write:repo_hook",
+      "read:repo_hook",
+      "admin:org",
+      "write:org",
+      "read:org",
+      "admin:public_key",
+      "write:public_key",
+      "read:public_key",
+      "admin:org_hook",
+      "gist",
+      "notifications",
+      "user",
+      "read:user",
+      "user:email",
+      "user:follow",
+      "project",
+      "read:project",
+      "delete_repo",
+      "write:discussion",
+      "read:discussion",
+      "write:packages",
+      "read:packages",
+      "delete:packages",
+      "admin:gpg_key",
+      "write:gpg_key",
+      "read:gpg_key",
+      "codespace",
+      "workflow"
+    ],
+    "scope_descriptions": {
+      "repo": "Full access to private and public repositories",
+      "repo:status": "Access to commit statuses",
+      "repo_deployment": "Access to deployment statuses",
+      "public_repo": "Access to public repositories only",
+      "repo:invite": "Access to repository invitations",
+      "security_events": "Read and write access to security events",
+      "admin:repo_hook": "Full control of repository hooks",
+      "write:repo_hook": "Write access to repository hooks",
+      "read:repo_hook": "Read access to repository hooks",
+      "admin:org": "Full control of organizations and teams",
+      "write:org": "Write access to organization membership",
+      "read:org": "Read access to organization membership",
+      "admin:public_key": "Full control of user public keys",
+      "write:public_key": "Write access to user public keys",
+      "read:public_key": "Read access to user public keys",
+      "admin:org_hook": "Full control of organization hooks",
+      "gist": "Write access to gists",
+      "notifications": "Access to notifications",
+      "user": "Read and write access to user profile data",
+      "read:user": "Read access to user profile data",
+      "user:email": "Access to user email addresses",
+      "user:follow": "Access to follow/unfollow users",
+      "project": "Write access to user and organization projects",
+      "read:project": "Read access to user and organization projects",
+      "delete_repo": "Delete access to adminable repositories",
+      "write:discussion": "Write access to team discussions",
+      "read:discussion": "Read access to team discussions",
+      "write:packages": "Upload packages to GitHub Package Registry",
+      "read:packages": "Download packages from GitHub Package Registry",
+      "delete:packages": "Delete packages from GitHub Package Registry",
+      "admin:gpg_key": "Full control of user GPG keys",
+      "write:gpg_key": "Write access to user GPG keys",
+      "read:gpg_key": "Read access to user GPG keys",
+      "codespace": "Full control of codespaces",
+      "workflow": "Update GitHub Action workflows"
+    },
+    "required_scopes": [
+      "user"
+    ],
+    "client_id": "$env:GITHUB_CLIENT_ID",
+    "client_secret": "$env:GITHUB_CLIENT_SECRET"
+  },
+  {
+    "type": "tool",
+    "name": "github.projects.create",
+    "description": "Create a new GitHub project board",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "owner",
+        "repo",
+        "name"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string",
+          "description": "Repository owner (username or organization)"
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the project board"
+        },
+        "body": {
+          "type": "string",
+          "description": "Description of the project board"
+        }
+      }
+    },
+    "endpoint": "https://api.github.com/repos/{owner}/{repo}/projects",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:github:default",
+      "Accept": "application/vnd.github.v3+json",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "github.projects.columns.create",
+    "description": "Create a column in a GitHub project board",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "project_id",
+        "name"
+      ],
+      "properties": {
+        "project_id": {
+          "type": "integer",
+          "description": "ID of the project board"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the column"
+        }
+      }
+    },
+    "endpoint": "https://api.github.com/projects/{project_id}/columns",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:github:default",
+      "Accept": "application/vnd.github.v3+json",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "github.projects.cards.create",
+    "description": "Create a card in a GitHub project column from an issue",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "column_id",
+        "content_id"
+      ],
+      "properties": {
+        "column_id": {
+          "type": "integer",
+          "description": "ID of the project column"
+        },
+        "content_id": {
+          "type": "integer",
+          "description": "ID of the issue to add as a card"
+        },
+        "content_type": {
+          "type": "string",
+          "description": "Type of content (should be 'Issue')",
+          "default": "Issue"
+        }
+      }
+    },
+    "endpoint": "https://api.github.com/projects/columns/{column_id}/cards",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:github:default",
+      "Accept": "application/vnd.github.v3+json",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "github.issues.get",
+    "description": "Get details of a GitHub issue by number",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "owner",
+        "repo",
+        "issue_number"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string",
+          "description": "Repository owner (username or organization)"
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name"
+        },
+        "issue_number": {
+          "type": "integer",
+          "description": "Issue number"
+        }
+      }
+    },
+    "endpoint": "https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}",
+    "method": "GET",
+    "headers": {
+      "Authorization": "$oauth:github:default",
+      "Accept": "application/vnd.github.v3+json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "github.projects.v2.create",
+    "description": "Create a new GitHub Project v2",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "query",
+        "variables"
+      ],
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "GraphQL mutation query",
+          "default": "mutation CreateProject($ownerId: ID!, $title: String!) { createProjectV2(input: {ownerId: $ownerId, title: $title}) { projectV2 { id url title } } }"
+        },
+        "variables": {
+          "type": "object",
+          "description": "GraphQL variables",
+          "properties": {
+            "ownerId": {
+              "type": "string",
+              "description": "ID of the organization or user that will own the project"
+            },
+            "title": {
+              "type": "string",
+              "description": "Title of the project"
+            }
+          }
+        }
+      }
+    },
+    "endpoint": "https://api.github.com/graphql",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:github:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "github.user.get_id",
+    "description": "Get the authenticated user's ID for creating projects",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "GraphQL query",
+          "default": "query GetViewer { viewer { id login name } }"
+        }
+      }
+    },
+    "endpoint": "https://api.github.com/graphql",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:github:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "github.projects.v2.add_draft_issue",
+    "description": "Add a draft issue to a GitHub Project v2",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "query",
+        "variables"
+      ],
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "GraphQL mutation query",
+          "default": "mutation AddDraftIssue($projectId: ID!, $title: String!, $body: String) { addProjectV2DraftIssue(input: {projectId: $projectId, title: $title, body: $body}) { projectItem { id } } }"
+        },
+        "variables": {
+          "type": "object",
+          "description": "GraphQL variables",
+          "properties": {
+            "projectId": {
+              "type": "string",
+              "description": "ID of the project"
+            },
+            "title": {
+              "type": "string",
+              "description": "Title of the draft issue"
+            },
+            "body": {
+              "type": "string",
+              "description": "Body content of the draft issue"
+            }
+          }
+        }
+      }
+    },
+    "endpoint": "https://api.github.com/graphql",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:github:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "oauth_provider",
+    "name": "x",
+    "display_name": "X (Twitter)",
+    "icon": "🐦",
+    "authorization_url": "https://twitter.com/i/oauth2/authorize",
+    "token_url": "https://api.twitter.com/2/oauth2/token",
+    "client_id": "$env:X_CLIENT_ID",
+    "client_secret": "$env:X_CLIENT_SECRET",
+    "scopes": [
+      "users.read",
+      "tweet.read",
+      "tweet.write",
+      "tweet.moderate.write",
+      "users.email",
+      "follows.read",
+      "follows.write",
+      "offline.access",
+      "space.read",
+      "mute.read",
+      "mute.write",
+      "like.read",
+      "like.write",
+      "list.read",
+      "list.write",
+      "block.read",
+      "block.write",
+      "bookmark.read",
+      "bookmark.write",
+      "media.write"
+    ],
+    "required_scopes": [
+      "users.read"
+    ],
+    "scope_descriptions": {
+      "tweet.read": "All the Tweets you can view, including Tweets from protected accounts",
+      "tweet.write": "Tweet and Retweet for you",
+      "tweet.moderate.write": "Hide and unhide replies to your Tweets",
+      "users.email": "Email from an authenticated user",
+      "users.read": "Any account you can view, including protected accounts",
+      "follows.read": "People who follow you and people who you follow",
+      "follows.write": "Follow and unfollow people for you",
+      "offline.access": "Stay connected to your account until you revoke access",
+      "space.read": "All the Spaces you can view",
+      "mute.read": "Accounts you've muted",
+      "mute.write": "Mute and unmute accounts for you",
+      "like.read": "Tweets you've liked and likes you can view",
+      "like.write": "Like and un-like Tweets for you",
+      "list.read": "Lists, list members, and list followers of lists you've created or are a member of, including private lists",
+      "list.write": "Create and manage Lists for you",
+      "block.read": "Accounts you've blocked",
+      "block.write": "Block and unblock accounts for you",
+      "bookmark.read": "Get Bookmarked Tweets from an authenticated user",
+      "bookmark.write": "Bookmark and remove Bookmarks from Tweets",
+      "media.write": "Upload media"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "x.user.me",
+    "description": "Get the authenticated user's profile information",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "user.fields": {
+          "type": "string",
+          "description": "Comma-separated list of user fields to include",
+          "default": "id,name,username,public_metrics,verified,description"
+        }
+      }
+    },
+    "endpoint": "https://api.twitter.com/2/users/me",
+    "method": "GET",
+    "headers": {
+      "Authorization": "$oauth:x:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "x.tweets.timeline",
+    "description": "Get tweets from the authenticated user's home timeline",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "max_results": {
+          "type": "integer",
+          "description": "Maximum number of tweets to return (5-100)",
+          "minimum": 5,
+          "maximum": 100,
+          "default": 10
+        },
+        "tweet.fields": {
+          "type": "string",
+          "description": "Comma-separated list of tweet fields to include",
+          "default": "id,text,author_id,created_at,public_metrics,context_annotations"
+        },
+        "user.fields": {
+          "type": "string",
+          "description": "Comma-separated list of user fields to include",
+          "default": "id,name,username,verified"
+        },
+        "expansions": {
+          "type": "string",
+          "description": "Comma-separated list of expansions",
+          "default": "author_id"
+        }
+      }
+    },
+    "endpoint": "https://api.twitter.com/2/users/me/timelines/reverse_chronological",
+    "method": "GET",
+    "headers": {
+      "Authorization": "$oauth:x:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "x.tweets.post",
+    "description": "Post a new tweet to X (Twitter)",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The text content of the tweet",
+          "maxLength": 280
+        },
+        "reply": {
+          "type": "object",
+          "description": "Tweet to reply to",
+          "properties": {
+            "in_reply_to_tweet_id": {
+              "type": "string",
+              "description": "ID of the tweet to reply to"
+            }
+          }
+        },
+        "media": {
+          "type": "object",
+          "description": "Media to attach to the tweet",
+          "properties": {
+            "media_ids": {
+              "type": "array",
+              "description": "Array of media IDs to attach",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "poll": {
+          "type": "object",
+          "description": "Poll to include in the tweet",
+          "properties": {
+            "options": {
+              "type": "array",
+              "description": "Poll options (2-4 options)",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 2,
+              "maxItems": 4
+            },
+            "duration_minutes": {
+              "type": "integer",
+              "description": "Poll duration in minutes (5-10080)",
+              "minimum": 5,
+              "maximum": 10080,
+              "default": 1440
+            }
+          }
+        }
+      }
+    },
+    "endpoint": "https://api.twitter.com/2/tweets",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:x:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "x.tweets.user_timeline",
+    "description": "Get tweets from a specific user's timeline",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "user_id"
+      ],
+      "properties": {
+        "user_id": {
+          "type": "string",
+          "description": "The ID of the user whose tweets to retrieve"
+        },
+        "max_results": {
+          "type": "integer",
+          "description": "Maximum number of tweets to return (5-100)",
+          "minimum": 5,
+          "maximum": 100,
+          "default": 10
+        },
+        "tweet.fields": {
+          "type": "string",
+          "description": "Comma-separated list of tweet fields to include",
+          "default": "id,text,author_id,created_at,public_metrics,context_annotations"
+        },
+        "exclude": {
+          "type": "string",
+          "description": "Comma-separated list of tweet types to exclude",
+          "enum": [
+            "retweets",
+            "replies"
+          ]
+        }
+      }
+    },
+    "endpoint": "https://api.twitter.com/2/users/{user_id}/tweets",
+    "method": "GET",
+    "headers": {
+      "Authorization": "$oauth:x:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "x.tweets.like",
+    "description": "Like a tweet",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "tweet_id"
+      ],
+      "properties": {
+        "tweet_id": {
+          "type": "string",
+          "description": "The ID of the tweet to like"
+        }
+      }
+    },
+    "endpoint": "https://api.twitter.com/2/users/me/likes",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:x:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "oauth_provider",
+    "name": "slack",
+    "display_name": "Slack",
+    "icon": "💬",
+    "authorization_url": "https://slack.com/oauth/v2/authorize",
+    "token_url": "https://slack.com/api/oauth.v2.access",
+    "client_id": "$env:SLACK_CLIENT_ID",
+    "client_secret": "$env:SLACK_CLIENT_SECRET",
+    "scopes": [
+      "users:read",
+      "users:read.email",
+      "users:profile:read",
+      "chat:write",
+      "channels:read",
+      "channels:join",
+      "channels:history",
+      "channels:manage",
+      "groups:read",
+      "groups:history",
+      "im:read",
+      "im:history",
+      "im:write",
+      "mpim:read",
+      "mpim:history",
+      "files:read",
+      "files:write",
+      "reactions:read",
+      "reactions:write",
+      "search:read",
+      "team:read"
+    ],
+    "required_scopes": [
+      "channels:read",
+      "chat:write",
+      "users:read"
+    ],
+    "scope_descriptions": {
+      "users:read": "View people in a workspace",
+      "users:read.email": "View email addresses of people in a workspace",
+      "users:profile:read": "View profile details about people in a workspace",
+      "chat:write": "Send messages as the app",
+      "channels:read": "View basic information about public channels in a workspace",
+      "channels:join": "Join public channels in a workspace",
+      "channels:history": "View messages and other content in public channels that BeemBeem has been added to",
+      "channels:manage": "Manage public channels that BeemBeem has been added to and create new ones",
+      "groups:read": "View basic information about private channels",
+      "groups:history": "View messages and other content in private channels",
+      "im:read": "View basic information about direct messages",
+      "im:history": "View messages and other content in direct messages",
+      "im:write": "Start direct messages with people",
+      "mpim:read": "View basic information about group direct messages",
+      "mpim:history": "View messages and other content in group direct messages",
+      "files:read": "View files shared in channels and conversations",
+      "files:write": "Upload, edit, and delete files as the app",
+      "reactions:read": "View emoji reactions and their associated content",
+      "reactions:write": "Add and edit emoji reactions",
+      "search:read": "Search messages, files, and other content",
+      "team:read": "View the workspace name, domain, and icon"
+    },
+    "webhook": {
+      "enabled": true,
+      "path": "/slack",
+      "secret": "$env:SLACK_WEBHOOK_SECRET",
+      "signature": {
+        "header": "X-Slack-Signature",
+        "timestamp_header": "X-Slack-Request-Timestamp",
+        "algorithm": "hmac-sha256",
+        "format": "v0={signature}",
+        "max_age": 300
+      },
+      "events": [
+        {
+          "type": "message",
+          "topic": "slack.message",
+          "match": {
+            "type": "event_callback",
+            "event.type": "message"
+          },
+          "extract": {
+            "channel": "event.channel",
+            "user": "event.user",
+            "text": "event.text",
+            "ts": "event.ts",
+            "thread_ts": "event.thread_ts",
+            "team_id": "team_id",
+            "event_id": "event_id"
+          }
+        },
+        {
+          "type": "app_mention",
+          "topic": "slack.mention",
+          "match": {
+            "type": "event_callback",
+            "event.type": "app_mention"
+          },
+          "extract": {
+            "channel": "event.channel",
+            "user": "event.user",
+            "text": "event.text",
+            "ts": "event.ts",
+            "team_id": "team_id",
+            "event_id": "event_id"
+          }
+        },
+        {
+          "type": "reaction_added",
+          "topic": "slack.reaction_added",
+          "match": {
+            "type": "event_callback",
+            "event.type": "reaction_added"
+          },
+          "extract": {
+            "user": "event.user",
+            "reaction": "event.reaction",
+            "item": "event.item",
+            "item_user": "event.item_user",
+            "team_id": "team_id",
+            "event_id": "event_id"
+          }
+        },
+        {
+          "type": "reaction_removed",
+          "topic": "slack.reaction_removed",
+          "match": {
+            "type": "event_callback",
+            "event.type": "reaction_removed"
+          },
+          "extract": {
+            "user": "event.user",
+            "reaction": "event.reaction",
+            "item": "event.item",
+            "item_user": "event.item_user",
+            "team_id": "team_id",
+            "event_id": "event_id"
+          }
+        },
+        {
+          "type": "url_verification",
+          "topic": "slack.url_verification",
+          "match": {
+            "type": "url_verification"
+          },
+          "extract": {
+            "challenge": "challenge"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.auth.test",
+    "description": "Test authentication and get bot/user info",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {}
+    },
+    "endpoint": "https://slack.com/api/auth.test",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.conversations.list",
+    "description": "List conversations (channels) in a workspace",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "types": {
+          "type": "string",
+          "description": "Mix and match channel types by providing a comma-separated list",
+          "default": "public_channel"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "The maximum number of items to return",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 100
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Paginate through collections by setting cursor to next_cursor"
+        },
+        "exclude_archived": {
+          "type": "boolean",
+          "description": "Set to true to exclude archived channels",
+          "default": false
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/conversations.list",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.conversations.history",
+    "description": "Fetch conversation history for a channel",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "channel"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "description": "Conversation ID to fetch history for"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Number of messages to return",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 100
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Paginate through collections by setting cursor to next_cursor"
+        },
+        "latest": {
+          "type": "string",
+          "description": "End of time range of messages to include in results"
+        },
+        "oldest": {
+          "type": "string",
+          "description": "Start of time range of messages to include in results"
+        },
+        "inclusive": {
+          "type": "boolean",
+          "description": "Include messages with latest or oldest timestamp in results",
+          "default": false
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/conversations.history",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.conversations.join",
+    "description": "Join an existing conversation",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "channel"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "description": "ID of conversation to join"
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/conversations.join",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.conversations.create",
+    "description": "Create a new channel",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the public or private channel to create"
+        },
+        "is_private": {
+          "type": "boolean",
+          "description": "Create a private channel instead of a public one",
+          "default": false
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/conversations.create",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.chat.postMessage",
+    "description": "Send a message to a channel",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "channel",
+        "text"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "description": "Channel, private group, or IM channel to send message to"
+        },
+        "text": {
+          "type": "string",
+          "description": "Text of the message to send"
+        },
+        "username": {
+          "type": "string",
+          "description": "Set your bot's user name"
+        },
+        "icon_emoji": {
+          "type": "string",
+          "description": "Emoji to use as the icon for this message"
+        },
+        "icon_url": {
+          "type": "string",
+          "description": "URL to an image to use as the icon for this message"
+        },
+        "thread_ts": {
+          "type": "string",
+          "description": "Provide another message's ts value to make this message a reply"
+        },
+        "reply_broadcast": {
+          "type": "boolean",
+          "description": "Used in conjunction with thread_ts to broadcast reply to channel",
+          "default": false
+        },
+        "unfurl_links": {
+          "type": "boolean",
+          "description": "Pass true to enable unfurling of primarily text-based content",
+          "default": true
+        },
+        "unfurl_media": {
+          "type": "boolean",
+          "description": "Pass false to disable unfurling of media content",
+          "default": true
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/chat.postMessage",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.chat.update",
+    "description": "Update a message",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "channel",
+        "ts",
+        "text"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "description": "Channel containing the message to be updated"
+        },
+        "ts": {
+          "type": "string",
+          "description": "Timestamp of the message to be updated"
+        },
+        "text": {
+          "type": "string",
+          "description": "New text for the message"
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/chat.update",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.chat.delete",
+    "description": "Delete a message",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "channel",
+        "ts"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "description": "Channel containing the message to be deleted"
+        },
+        "ts": {
+          "type": "string",
+          "description": "Timestamp of the message to be deleted"
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/chat.delete",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.users.list",
+    "description": "List all users in a workspace",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "description": "The maximum number of items to return",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Paginate through collections by setting cursor to next_cursor"
+        },
+        "include_locale": {
+          "type": "boolean",
+          "description": "Set this to true to receive the locale for users",
+          "default": false
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/users.list",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.users.info",
+    "description": "Get information about a user",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "user"
+      ],
+      "properties": {
+        "user": {
+          "type": "string",
+          "description": "User to get info on"
+        },
+        "include_locale": {
+          "type": "boolean",
+          "description": "Set this to true to receive the locale for this user",
+          "default": false
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/users.info",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.files.upload",
+    "description": "Upload or create a file",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "channels": {
+          "type": "string",
+          "description": "Comma-separated list of channel names or IDs where the file will be shared"
+        },
+        "content": {
+          "type": "string",
+          "description": "File contents via a POST variable"
+        },
+        "filename": {
+          "type": "string",
+          "description": "Filename of file"
+        },
+        "filetype": {
+          "type": "string",
+          "description": "A file type identifier"
+        },
+        "initial_comment": {
+          "type": "string",
+          "description": "The message text introducing the file in specified channels"
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of file"
+        },
+        "thread_ts": {
+          "type": "string",
+          "description": "Provide another message's ts value to upload this file as a reply"
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/files.upload",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.files.list",
+    "description": "List files in a workspace",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "type": "string",
+          "description": "Filter files appearing in a specific channel"
+        },
+        "user": {
+          "type": "string",
+          "description": "Filter files created by a single user"
+        },
+        "ts_from": {
+          "type": "string",
+          "description": "Filter files created after this timestamp (inclusive)"
+        },
+        "ts_to": {
+          "type": "string",
+          "description": "Filter files created before this timestamp (inclusive)"
+        },
+        "types": {
+          "type": "string",
+          "description": "Filter files by type (e.g., 'images', 'snippets', 'pdfs')"
+        },
+        "count": {
+          "type": "integer",
+          "description": "Number of items to return per page",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 100
+        },
+        "page": {
+          "type": "integer",
+          "description": "Page number of results to return",
+          "minimum": 1,
+          "default": 1
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/files.list",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.reactions.add",
+    "description": "Add a reaction to a message",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "channel",
+        "name",
+        "timestamp"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "description": "Channel where the message to add reaction to was posted"
+        },
+        "name": {
+          "type": "string",
+          "description": "Reaction (emoji) name"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "Timestamp of the message to add reaction to"
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/reactions.add",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.reactions.remove",
+    "description": "Remove a reaction from a message",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "channel",
+        "name",
+        "timestamp"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "description": "Channel where the message to remove reaction from was posted"
+        },
+        "name": {
+          "type": "string",
+          "description": "Reaction (emoji) name"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "Timestamp of the message to remove reaction from"
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/reactions.remove",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  },
+  {
+    "type": "tool",
+    "name": "slack.search.messages",
+    "description": "Search for messages in a workspace",
+    "kind": "task",
+    "version": "1.0.0",
+    "registry": "default",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search query"
+        },
+        "count": {
+          "type": "integer",
+          "description": "Number of items to return per page",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        },
+        "page": {
+          "type": "integer",
+          "description": "Page number of results to return",
+          "minimum": 1,
+          "default": 1
+        },
+        "sort": {
+          "type": "string",
+          "description": "Return matches sorted by either score or timestamp",
+          "enum": [
+            "score",
+            "timestamp"
+          ],
+          "default": "score"
+        },
+        "sort_dir": {
+          "type": "string",
+          "description": "Change sort direction to ascending (asc) or descending (desc)",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "default": "desc"
+        }
+      }
+    },
+    "endpoint": "https://slack.com/api/search.messages",
+    "method": "POST",
+    "headers": {
+      "Authorization": "$oauth:slack:default",
+      "Content-Type": "application/json"
+    }
+  }
+]

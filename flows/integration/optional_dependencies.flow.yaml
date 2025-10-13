@@ -1,0 +1,24 @@
+# Integration test: depends_on is optional
+# Steps without depends_on should execute normally
+
+name: optional_dependencies_test
+on: cli.manual
+
+steps:
+  - id: step1
+    use: core.log
+    with:
+      message: "Step 1 - no depends_on field"
+
+  - id: step2
+    use: core.log
+    with:
+      message: "Step 2 - no depends_on field"
+
+  - id: step3
+    use: core.log
+    with:
+      message: "Step 3 - explicit depends_on"
+    depends_on:
+      - step1
+      - step2

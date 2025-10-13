@@ -1,0 +1,50 @@
+# Integration test: Hybrid dependencies (manual + auto-detected)
+#
+# This flow combines both manual `depends_on` and automatic template detection.
+# The engine merges both sources to create complete dependency graph.
+
+name: hybrid_dependencies_test
+on: cli.manual
+
+steps:
+  # Runs FOURTH - has manual depends_on AND template reference
+  - id: final_step
+    use: core.echo
+    with:
+      # Template reference auto-detected
+      text: "Result: {{ steps.data_step.text }}"
+    # Manual dependency (e.g., for side effects not visible in templates)
+    depends_on:
+      - setup_step
+
+  # Runs FIRST - no dependencies
+  - id: setup_step
+    use: core.log
+    with:
+      message: "Setting up resources..."
+
+  # Runs SECOND - auto-detected dependency on setup_step
+  - id: config_step
+    use: core.echo
+    with:
+      text: "Config after {{ steps.setup_step.message }}"
+
+  # Runs THIRD - manual dependency ensures it runs after config
+  - id: data_step
+    use: core.echo
+    with:
+      text: "Processing data"
+    depends_on:
+      - config_step
+
+# Expected execution order: setup_step → config_step → data_step → final_step
+#
+# Dependency graph (merged):
+# setup_step: []
+# config_step: [setup_step]  ← auto-detected from template
+# data_step: [config_step]  ← manual depends_on
+# final_step: [setup_step, data_step]  ← hybrid (manual + auto)
+#
+# This demonstrates the "best of both worlds":
+# - Auto-detection for convenience (config_step)
+# - Manual depends_on for non-template dependencies (data_step, final_step)

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authorize Application - BeemFlow</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            max-width: 500px;
+            width: 100%;
+            padding: 40px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 24px;
+        }
+        .app-info {
+            background: #f7f9fc;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .app-name {
+            font-weight: 600;
+            color: #667eea;
+            font-size: 18px;
+        }
+        .button-group {
+            display: flex;
+            gap: 15px;
+            margin-top: 30px;
+        }
+        .btn {
+            flex: 1;
+            padding: 14px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-approve {
+            background: #4CAF50;
+            color: white;
+        }
+        .btn-approve:hover {
+            background: #45a049;
+        }
+        .btn-deny {
+            background: #f44336;
+            color: white;
+        }
+        .btn-deny:hover {
+            background: #da190b;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Authorize Application</h1>
+        <div class="app-info">
+            <div class="app-name">{{client_name}}</div>
+            <p>Scope: {{scope}}</p>
+        </div>
+        <form method="post">
+            <div class="button-group">
+                <button type="submit" name="action" value="approve" class="btn btn-approve">Approve</button>
+                <button type="submit" name="action" value="deny" class="btn btn-deny">Deny</button>
+            </div>
+        </form>
+    </div>
+</body>
+</html>

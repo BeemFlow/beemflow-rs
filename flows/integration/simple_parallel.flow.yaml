@@ -1,0 +1,45 @@
+name: simple_parallel_test
+description: Simple parallel execution test without network requirements
+on: cli.manual
+
+vars:
+  items: ["item1", "item2", "item3"]
+
+steps:
+  # Test basic parallel block
+  - id: parallel_block
+    parallel: true
+    steps:
+      - id: task1
+        use: core.echo
+        with:
+          text: "Task 1 completed"
+      - id: task2
+        use: core.echo
+        with:
+          text: "Task 2 completed"
+      - id: task3
+        use: core.echo
+        with:
+          text: "Task 3 completed"
+
+  # Test foreach sequential
+  - id: foreach_sequential
+    foreach: "{{ items }}"
+    as: "item"
+    do:
+      - id: "process_{{ item }}"
+        use: core.echo
+        with:
+          text: "Processing {{ item }}"
+
+  # Verify results
+  - id: verify
+    use: core.echo
+    with:
+      text: |
+        All tasks completed!
+        Task1: {{ task1.text }}
+        Task2: {{ task2.text }}
+        Task3: {{ task3.text }}
+

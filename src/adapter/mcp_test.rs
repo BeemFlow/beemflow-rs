@@ -1,0 +1,201 @@
+use super::*;
+use crate::constants::ADAPTER_ID_MCP;
+use crate::model::McpServerConfig;
+
+#[test]
+fn test_mcp_adapter_creation() {
+    let adapter = McpAdapter::new();
+    assert_eq!(adapter.id(), ADAPTER_ID_MCP);
+}
+
+#[test]
+fn test_mcp_adapter_config() {
+    let adapter = McpAdapter::new();
+    adapter.register_server(
+        "test".to_string(),
+        McpServerConfig {
+            command: "npx".to_string(),
+            args: Some(vec!["-y".to_string(), "test-server".to_string()]),
+            env: None,
+            port: None,
+            transport: Some("stdio".to_string()),
+            endpoint: None,
+        },
+    );
+    // Config is now internal to manager - just verify registration doesn't panic
+}
+
+#[test]
+fn test_mcp_adapter_manifest() {
+    let adapter = McpAdapter::new();
+    assert!(
+        adapter.manifest().is_none(),
+        "MCP adapter should not have manifest"
+    );
+}
+
+#[tokio::test]
+async fn test_mcp_adapter_missing_use() {
+    let adapter = McpAdapter::new();
+    let inputs = {
+        let mut m = HashMap::new();
+        m.insert("test".to_string(), Value::String("value".to_string()));
+        m
+    };
+
+    let result = adapter.execute(inputs).await;
+    assert!(result.is_err(), "Should error when __use is missing");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("missing __use") || err_msg.contains("__use"),
+        "Error should mention missing __use"
+    );
+}
+
+#[tokio::test]
+async fn test_mcp_adapter_invalid_use_type() {
+    let adapter = McpAdapter::new();
+    let inputs = {
+        let mut m = HashMap::new();
+        m.insert("__use".to_string(), Value::Number(123.into()));
+        m
+    };
+
+    let result = adapter.execute(inputs).await;
+    assert!(result.is_err(), "Should error when __use is not a string");
+}
+
+#[tokio::test]
+async fn test_mcp_adapter_invalid_format() {
+    let adapter = McpAdapter::new();
+
+    let test_cases = vec![
+        "invalid://format",
+        "mcp://",
+        "mcp://host",
+        "mcp://host/",
+        "mcp:///tool",
+        "mcp://host/tool/extra",
+    ];
+
+    for test_case in test_cases {
+        let inputs = {
+            let mut m = HashMap::new();
+            m.insert("__use".to_string(), Value::String(test_case.to_string()));
+            m
+        };
+
+        let result = adapter.execute(inputs).await;
+        assert!(
+            result.is_err(),
+            "Should error for invalid format: {}",
+            test_case
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("invalid mcp://") || err_msg.contains("format"),
+            "Error should mention invalid format for {}",
+            test_case
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_mcp_adapter_unconfigured_server() {
+    let adapter = McpAdapter::new();
+    let inputs = {
+        let mut m = HashMap::new();
+        m.insert(
+            "__use".to_string(),
+            Value::String("mcp://unconfigured_server/tool".to_string()),
+        );
+        m
+    };
+
+    let result = adapter.execute(inputs).await;
+    assert!(result.is_err(), "Should error for unconfigured server");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("not configured") || err_msg.contains("unconfigured"),
+        "Error should mention server not configured"
+    );
+}
+
+#[tokio::test]
+async fn test_mcp_adapter_multiple_server_configs() {
+    let adapter = McpAdapter::new();
+
+    // Register multiple servers
+    adapter.register_server(
+        "server1".to_string(),
+        McpServerConfig {
+            command: "npx".to_string(),
+            args: Some(vec!["-y".to_string(), "server1-mcp".to_string()]),
+            env: None,
+            port: None,
+            transport: Some("stdio".to_string()),
+            endpoint: None,
+        },
+    );
+
+    adapter.register_server(
+        "server2".to_string(),
+        McpServerConfig {
+            command: "npx".to_string(),
+            args: Some(vec!["-y".to_string(), "server2-mcp".to_string()]),
+            env: None,
+            port: None,
+            transport: Some("stdio".to_string()),
+            endpoint: None,
+        },
+    );
+
+    adapter.register_server(
+        "server3".to_string(),
+        McpServerConfig {
+            command: "python3".to_string(),
+            args: Some(vec!["-m".to_string(), "server3".to_string()]),
+            env: Some({
+                let mut e = HashMap::new();
+                e.insert("API_KEY".to_string(), "test_key".to_string());
+                e
+            }),
+            port: None,
+            transport: Some("stdio".to_string()),
+            endpoint: None,
+        },
+    );
+    // Config tracking is now internal to manager - just verify no panics
+}
+
+#[tokio::test]
+async fn test_mcp_adapter_config_override() {
+    let adapter = McpAdapter::new();
+
+    // Register server
+    adapter.register_server(
+        "test".to_string(),
+        McpServerConfig {
+            command: "npx".to_string(),
+            args: Some(vec!["-y".to_string(), "old-server".to_string()]),
+            env: None,
+            port: None,
+            transport: Some("stdio".to_string()),
+            endpoint: None,
+        },
+    );
+
+    // Override with new config
+    adapter.register_server(
+        "test".to_string(),
+        McpServerConfig {
+            command: "npx".to_string(),
+            args: Some(vec!["-y".to_string(), "new-server".to_string()]),
+            env: None,
+            port: None,
+            transport: Some("stdio".to_string()),
+            endpoint: None,
+        },
+    );
+    // Config management is now internal to manager - just verify no panics
+}

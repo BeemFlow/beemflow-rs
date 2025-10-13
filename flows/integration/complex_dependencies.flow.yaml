@@ -1,0 +1,42 @@
+# Integration test: Complex dependency graph (diamond pattern)
+# Tests validation of a valid complex dependency structure
+
+name: complex_dependencies_test
+on: cli.manual
+
+steps:
+  - id: root
+    use: core.log
+    with:
+      message: "Root step"
+
+  - id: branch_a
+    use: core.log
+    with:
+      message: "Branch A"
+    depends_on:
+      - root
+
+  - id: branch_b
+    use: core.log
+    with:
+      message: "Branch B"
+    depends_on:
+      - root
+
+  - id: merge
+    use: core.log
+    with:
+      message: "Merge step - depends on both branches"
+    depends_on:
+      - branch_a
+      - branch_b
+
+# Dependency graph (diamond pattern):
+#        root
+#       /    \
+#  branch_a  branch_b
+#       \    /
+#        merge
+#
+# This should validate successfully (no cycles)

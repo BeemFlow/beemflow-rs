@@ -1,0 +1,38 @@
+# Integration test: Dependency order
+# NOTE: Current implementation does NOT enforce depends_on order
+# Steps execute in the order they appear in the YAML file
+# This test documents the current behavior (NOT the ideal behavior)
+
+name: dependency_order_test
+on: cli.manual
+
+steps:
+  # Step C appears first but depends on step_b
+  - id: step_c
+    use: core.log
+    with:
+      message: "Step C - appears first, depends on B"
+    depends_on:
+      - step_b
+
+  # Step A has no dependencies
+  - id: step_a
+    use: core.log
+    with:
+      message: "Step A - no dependencies"
+
+  # Step B depends on step_a
+  - id: step_b
+    use: core.log
+    with:
+      message: "Step B - depends on A"
+    depends_on:
+      - step_a
+
+# CURRENT BEHAVIOR (not ideal):
+# Execution order: step_c → step_a → step_b
+# (Order determined by position in YAML, not by depends_on)
+#
+# IDEAL BEHAVIOR (future enhancement):
+# Execution order: step_a → step_b → step_c
+# (Order determined by topological sort of dependencies)

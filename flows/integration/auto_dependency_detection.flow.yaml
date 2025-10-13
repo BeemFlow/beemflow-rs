@@ -1,0 +1,37 @@
+# Integration test: Automatic dependency detection from templates
+#
+# This flow intentionally has steps in "wrong" order in YAML.
+# The engine should detect dependencies from template references
+# and execute them in the correct order.
+
+name: auto_dependency_detection_test
+on: cli.manual
+
+steps:
+  # Step 3 in YAML, but should run THIRD (depends on step_a and step_b via template)
+  - id: step_c
+    use: core.echo
+    with:
+      text: "C: {{ steps.step_a.text }} + {{ steps.step_b.text }}"
+
+  # Step 1 in YAML, but should run FIRST (no dependencies)
+  - id: step_a
+    use: core.echo
+    with:
+      text: "Hello"
+
+  # Step 2 in YAML, but should run SECOND (depends on step_a via template)
+  - id: step_b
+    use: core.echo
+    with:
+      text: "{{ steps.step_a.text }} World"
+
+# Expected execution order: step_a → step_b → step_c
+#
+# Dependency graph (auto-detected from templates):
+# step_a: []
+# step_b: [step_a]  ← detected from {{ steps.step_a.text }}
+# step_c: [step_a, step_b]  ← detected from templates
+#
+# Without auto-detection, this would fail because step_c would try to
+# reference step_a and step_b before they've run.
