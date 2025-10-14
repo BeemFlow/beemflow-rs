@@ -579,6 +579,19 @@ impl Default for Config {
     }
 }
 
+/// Get the flows directory from config or default
+///
+/// Priority:
+/// 1. Config.flows_dir if set
+/// 2. ~/.beemflow/flows (default)
+pub fn get_flows_dir(config: &Config) -> PathBuf {
+    config
+        .flows_dir
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(crate::constants::default_flows_dir()))
+}
+
 /// Get default local registry path
 pub fn default_local_registry_path() -> PathBuf {
     PathBuf::from(".beemflow/registry.json")

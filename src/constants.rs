@@ -44,8 +44,11 @@ pub fn default_local_registry_path() -> &'static str {
     &REGISTRY_PATH
 }
 
-/// Default flows directory (flows)
-pub const DEFAULT_FLOWS_DIR: &str = "flows";
+/// Default flows directory (~/.beemflow/flows)
+pub fn default_flows_dir() -> &'static str {
+    static FLOWS_DIR: Lazy<String> = Lazy::new(|| format!("{}/flows", default_config_dir()));
+    &FLOWS_DIR
+}
 
 /// File permission for created files (0644)
 pub const FILE_PERMISSION: u32 = 0o644;

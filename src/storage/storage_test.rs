@@ -261,69 +261,8 @@ async fn test_flow_versioning_operations<S: Storage>(storage: Arc<S>) {
     );
 }
 
-/// Test flow management operations
-async fn test_flow_management<S: Storage>(storage: Arc<S>) {
-    // Save flows
-    storage
-        .save_flow("flow1", "content1", None)
-        .await
-        .expect("Save flow1 should succeed");
-    storage
-        .save_flow("flow2", "content2", None)
-        .await
-        .expect("Save flow2 should succeed");
-    storage
-        .save_flow("flow3", "content3", None)
-        .await
-        .expect("Save flow3 should succeed");
-
-    // List flows
-    let flows = storage
-        .list_flows()
-        .await
-        .expect("ListFlows should succeed");
-    assert_eq!(flows.len(), 3, "Expected 3 flows");
-    assert!(flows.contains(&"flow1".to_string()));
-    assert!(flows.contains(&"flow2".to_string()));
-    assert!(flows.contains(&"flow3".to_string()));
-
-    // Get flow
-    let content = storage
-        .get_flow("flow1")
-        .await
-        .expect("GetFlow should succeed");
-    assert_eq!(content, Some("content1".to_string()));
-
-    // Update flow (idempotent save)
-    storage
-        .save_flow("flow1", "updated_content", None)
-        .await
-        .expect("Update flow1 should succeed");
-    let content = storage
-        .get_flow("flow1")
-        .await
-        .expect("GetFlow should succeed");
-    assert_eq!(content, Some("updated_content".to_string()));
-
-    // Delete flow
-    storage
-        .delete_flow("flow2")
-        .await
-        .expect("DeleteFlow should succeed");
-    let flows = storage
-        .list_flows()
-        .await
-        .expect("ListFlows should succeed");
-    assert_eq!(flows.len(), 2, "Expected 2 flows after delete");
-    assert!(!flows.contains(&"flow2".to_string()));
-
-    // Get deleted flow
-    let deleted = storage
-        .get_flow("flow2")
-        .await
-        .expect("GetFlow should succeed");
-    assert!(deleted.is_none(), "Deleted flow should return None");
-}
+// Note: Flow CRUD operations (save/get/list/delete) are now handled by pure functions
+// in storage::flows module and tested there. Database storage only handles versioning.
 
 /// Test multiple steps per run
 async fn test_multiple_steps<S: Storage>(storage: Arc<S>) {
@@ -412,12 +351,6 @@ async fn test_memory_storage_versioning() {
 }
 
 #[tokio::test]
-async fn test_memory_storage_flow_mgmt() {
-    let storage = Arc::new(MemoryStorage::new());
-    test_flow_management(storage).await;
-}
-
-#[tokio::test]
 async fn test_memory_storage_multiple_steps() {
     let storage = Arc::new(MemoryStorage::new());
     test_multiple_steps(storage).await;
@@ -451,16 +384,6 @@ async fn test_sqlite_storage_versioning() {
             .expect("SQLite creation failed"),
     );
     test_flow_versioning_operations(storage).await;
-}
-
-#[tokio::test]
-async fn test_sqlite_storage_flow_mgmt() {
-    let storage = Arc::new(
-        SqliteStorage::new(":memory:")
-            .await
-            .expect("SQLite creation failed"),
-    );
-    test_flow_management(storage).await;
 }
 
 #[tokio::test]
@@ -622,30 +545,6 @@ async fn test_sqlite_storage_concurrent_writes() {
 // ========================================
 
 #[tokio::test]
-async fn test_memory_storage_get_missing_flow() {
-    let storage = Arc::new(MemoryStorage::new());
-    let result = storage
-        .get_flow("nonexistent")
-        .await
-        .expect("GetFlow should not error");
-    assert!(result.is_none(), "Should return None for missing flow");
-}
-
-#[tokio::test]
-async fn test_sqlite_storage_get_missing_flow() {
-    let storage = Arc::new(
-        SqliteStorage::new(":memory:")
-            .await
-            .expect("SQLite creation failed"),
-    );
-    let result = storage
-        .get_flow("nonexistent")
-        .await
-        .expect("GetFlow should not error");
-    assert!(result.is_none(), "Should return None for missing flow");
-}
-
-#[tokio::test]
 async fn test_memory_storage_delete_nonexistent() {
     let storage = Arc::new(MemoryStorage::new());
     // Deleting non-existent items should not error
@@ -653,10 +552,6 @@ async fn test_memory_storage_delete_nonexistent() {
         .delete_run(Uuid::new_v4())
         .await
         .expect("Delete non-existent run should not error");
-    storage
-        .delete_flow("nonexistent")
-        .await
-        .expect("Delete non-existent flow should not error");
     storage
         .delete_oauth_credential("nonexistent")
         .await
@@ -675,10 +570,6 @@ async fn test_sqlite_storage_delete_nonexistent() {
         .delete_run(Uuid::new_v4())
         .await
         .expect("Delete non-existent run should not error");
-    storage
-        .delete_flow("nonexistent")
-        .await
-        .expect("Delete non-existent flow should not error");
     storage
         .delete_oauth_credential("nonexistent")
         .await

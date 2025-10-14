@@ -260,30 +260,8 @@ async fn test_paused_runs_roundtrip() {
     assert!(loaded.contains_key("token2"));
 }
 
-#[tokio::test]
-async fn test_flow_management() {
-    let storage = SqliteStorage::new(":memory:").await.unwrap();
-
-    // Save flows
-    storage.save_flow("flow1", "content1", None).await.unwrap();
-    storage.save_flow("flow2", "content2", None).await.unwrap();
-
-    // List flows
-    let flows = storage.list_flows().await.unwrap();
-    assert_eq!(flows.len(), 2);
-    assert!(flows.contains(&"flow1".to_string()));
-    assert!(flows.contains(&"flow2".to_string()));
-
-    // Get flow
-    let content = storage.get_flow("flow1").await.unwrap();
-    assert_eq!(content, Some("content1".to_string()));
-
-    // Delete flow
-    storage.delete_flow("flow1").await.unwrap();
-    let flows = storage.list_flows().await.unwrap();
-    assert_eq!(flows.len(), 1);
-    assert!(!flows.contains(&"flow1".to_string()));
-}
+// Note: Flow CRUD operations (save/get/list/delete) are now handled by pure functions
+// in storage::flows module and tested there. Database storage only handles versioning.
 
 #[tokio::test]
 async fn test_register_and_resolve_wait() {
@@ -480,9 +458,9 @@ async fn test_auto_create_parent_directories() {
     );
     assert!(nested_path.exists(), "Database file should exist");
 
-    // Verify it's functional
-    let flows = storage.list_flows().await.unwrap();
-    assert_eq!(flows.len(), 0, "New database should have no flows");
+    // Verify it's functional - test with runs instead of flows
+    let runs = storage.list_runs().await.unwrap();
+    assert_eq!(runs.len(), 0, "New database should have no runs");
 }
 
 #[tokio::test]
@@ -493,11 +471,11 @@ async fn test_reuse_existing_database() {
     let db_path = temp_dir.path().join("reuse.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    // Create storage and add some data
+    // Create storage and add some versioned flow data
     {
         let storage = SqliteStorage::new(db_path_str).await.unwrap();
         storage
-            .save_flow("existing_flow", "test content", None)
+            .deploy_flow_version("existing_flow", "1.0.0", "test content")
             .await
             .unwrap();
     }
@@ -506,11 +484,13 @@ async fn test_reuse_existing_database() {
     let storage = SqliteStorage::new(db_path_str).await.unwrap();
 
     // Verify existing data is accessible
-    let flows = storage.list_flows().await.unwrap();
-    assert_eq!(flows.len(), 1, "Should find existing flow");
-    assert_eq!(flows[0], "existing_flow");
+    let version = storage.get_deployed_version("existing_flow").await.unwrap();
+    assert_eq!(version, Some("1.0.0".to_string()));
 
-    let content = storage.get_flow("existing_flow").await.unwrap();
+    let content = storage
+        .get_flow_version_content("existing_flow", "1.0.0")
+        .await
+        .unwrap();
     assert_eq!(content, Some("test content".to_string()));
 }
 
@@ -532,13 +512,20 @@ async fn test_sqlite_prefix_handling() {
         "Database should be created at correct path"
     );
 
-    // Verify it's functional
-    storage
-        .save_flow("prefix_test", "content", None)
-        .await
-        .unwrap();
-    let content = storage.get_flow("prefix_test").await.unwrap();
-    assert_eq!(content, Some("content".to_string()));
+    // Verify it's functional - test with run operations
+    let run = Run {
+        id: Uuid::new_v4(),
+        flow_name: "test".to_string().into(),
+        event: HashMap::new(),
+        vars: HashMap::new(),
+        status: RunStatus::Running,
+        started_at: Utc::now(),
+        ended_at: None,
+        steps: None,
+    };
+    storage.save_run(&run).await.unwrap();
+    let retrieved = storage.get_run(run.id).await.unwrap();
+    assert!(retrieved.is_some());
 }
 
 #[tokio::test]
@@ -561,10 +548,17 @@ async fn test_concurrent_database_access() {
         let path = db_path_str.clone();
         tasks.spawn(async move {
             let storage = SqliteStorage::new(&path).await.unwrap();
-            storage
-                .save_flow(&format!("flow_{}", i), &format!("content_{}", i), None)
-                .await
-                .unwrap();
+            let run = Run {
+                id: Uuid::new_v4(),
+                flow_name: format!("flow_{}", i).into(),
+                event: HashMap::new(),
+                vars: HashMap::new(),
+                status: RunStatus::Running,
+                started_at: Utc::now(),
+                ended_at: None,
+                steps: None,
+            };
+            storage.save_run(&run).await.unwrap();
         });
     }
 
@@ -573,10 +567,10 @@ async fn test_concurrent_database_access() {
         result.unwrap();
     }
 
-    // Verify all flows were saved
+    // Verify all runs were saved
     let storage = SqliteStorage::new(&db_path_str).await.unwrap();
-    let flows = storage.list_flows().await.unwrap();
-    assert_eq!(flows.len(), 5, "All concurrent writes should succeed");
+    let runs = storage.list_runs().await.unwrap();
+    assert_eq!(runs.len(), 5, "All concurrent writes should succeed");
 }
 
 #[tokio::test]
@@ -584,12 +578,19 @@ async fn test_memory_database_still_works() {
     // Ensure :memory: databases still work correctly
     let storage = SqliteStorage::new(":memory:").await.unwrap();
 
-    storage
-        .save_flow("memory_flow", "content", None)
-        .await
-        .unwrap();
-    let flows = storage.list_flows().await.unwrap();
-    assert_eq!(flows.len(), 1);
+    let run = Run {
+        id: Uuid::new_v4(),
+        flow_name: "test".to_string().into(),
+        event: HashMap::new(),
+        vars: HashMap::new(),
+        status: RunStatus::Running,
+        started_at: Utc::now(),
+        ended_at: None,
+        steps: None,
+    };
+    storage.save_run(&run).await.unwrap();
+    let runs = storage.list_runs().await.unwrap();
+    assert_eq!(runs.len(), 1);
 
     // Memory databases should not create any files
     // (This is implicitly tested by the fact that no file path is involved)

@@ -175,8 +175,8 @@ where
 }
 
 // Helper function for loading flows from name or file
-async fn load_flow_from_storage(
-    storage: &Arc<dyn Storage>,
+async fn load_flow_from_config(
+    config: &Config,
     name: Option<&str>,
     file: Option<&str>,
 ) -> Result<crate::model::Flow> {
@@ -184,8 +184,8 @@ async fn load_flow_from_storage(
     match (file, name) {
         (Some(f), _) => parse_file(f, None),
         (None, Some(n)) => {
-            let content = storage
-                .get_flow(n)
+            let flows_dir = crate::config::get_flows_dir(config);
+            let content = crate::storage::flows::get_flow(&flows_dir, n)
                 .await?
                 .ok_or_else(|| not_found("Flow", n))?;
             parse_string(&content, None)

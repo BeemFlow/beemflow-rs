@@ -340,56 +340,6 @@ impl StateStorage for SqliteStorage {
 
 #[async_trait]
 impl FlowStorage for SqliteStorage {
-    // Flow management methods
-    async fn save_flow(&self, name: &str, content: &str, _version: Option<&str>) -> Result<()> {
-        let now = Utc::now().timestamp();
-
-        sqlx::query(
-            "INSERT INTO flows (name, content, created_at, updated_at)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(name) DO UPDATE SET
-                content = excluded.content,
-                updated_at = excluded.updated_at",
-        )
-        .bind(name)
-        .bind(content)
-        .bind(now)
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    async fn get_flow(&self, name: &str) -> Result<Option<String>> {
-        let row = sqlx::query("SELECT content FROM flows WHERE name = ?")
-            .bind(name)
-            .fetch_optional(&self.pool)
-            .await?;
-
-        Ok(row.and_then(|r| r.try_get("content").ok()))
-    }
-
-    async fn list_flows(&self) -> Result<Vec<String>> {
-        let rows = sqlx::query("SELECT name FROM flows ORDER BY name")
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(rows
-            .into_iter()
-            .filter_map(|r| r.try_get("name").ok())
-            .collect())
-    }
-
-    async fn delete_flow(&self, name: &str) -> Result<()> {
-        sqlx::query("DELETE FROM flows WHERE name = ?")
-            .bind(name)
-            .execute(&self.pool)
-            .await?;
-
-        Ok(())
-    }
-
     // Flow versioning methods
     async fn deploy_flow_version(
         &self,
@@ -504,6 +454,31 @@ impl FlowStorage for SqliteStorage {
         }
 
         Ok(snapshots)
+    }
+
+    async fn get_latest_deployed_version_from_history(
+        &self,
+        flow_name: &str,
+    ) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT version FROM flow_versions
+             WHERE flow_name = ?
+             ORDER BY deployed_at DESC, version DESC
+             LIMIT 1",
+        )
+        .bind(flow_name)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.and_then(|r| r.try_get("version").ok()))
+    }
+
+    async fn unset_deployed_version(&self, flow_name: &str) -> Result<()> {
+        sqlx::query("DELETE FROM deployed_flows WHERE flow_name = ?")
+            .bind(flow_name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }
 

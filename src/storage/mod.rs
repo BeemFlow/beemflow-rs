@@ -9,6 +9,7 @@
 //! - `StateStorage`: Paused runs and wait tokens for durable execution
 //! - `Storage`: Composition trait implementing all of the above
 
+pub mod flows; // Pure functions for filesystem flow operations
 pub mod memory;
 pub mod postgres;
 pub mod sql_common;
@@ -74,24 +75,13 @@ pub trait StateStorage: Send + Sync {
     async fn fetch_and_delete_paused_run(&self, token: &str) -> Result<Option<serde_json::Value>>;
 }
 
-/// Flow storage for workflow definitions and versioning
+/// Flow versioning and deployment storage (database-backed)
+///
+/// This trait handles production flow deployments and version history.
+/// For draft flows, use the pure functions in storage::flows instead.
 #[async_trait]
 pub trait FlowStorage: Send + Sync {
-    // Flow management methods (for operations layer)
-    /// Save a flow definition
-    async fn save_flow(&self, name: &str, content: &str, version: Option<&str>) -> Result<()>;
-
-    /// Get a flow definition  
-    async fn get_flow(&self, name: &str) -> Result<Option<String>>;
-
-    /// List all flow names
-    async fn list_flows(&self) -> Result<Vec<String>>;
-
-    /// Delete a flow
-    async fn delete_flow(&self, name: &str) -> Result<()>;
-
-    // Flow versioning methods
-    /// Deploy a flow version
+    /// Deploy a flow version (creates immutable snapshot)
     async fn deploy_flow_version(
         &self,
         flow_name: &str,
@@ -99,21 +89,30 @@ pub trait FlowStorage: Send + Sync {
         content: &str,
     ) -> Result<()>;
 
-    /// Set the deployed version for a flow
+    /// Set which version is currently deployed for a flow
     async fn set_deployed_version(&self, flow_name: &str, version: &str) -> Result<()>;
 
-    /// Get the currently deployed version
+    /// Get the currently deployed version for a flow
     async fn get_deployed_version(&self, flow_name: &str) -> Result<Option<String>>;
 
-    /// Get content for a specific flow version
+    /// Get the content of a specific deployed version
     async fn get_flow_version_content(
         &self,
         flow_name: &str,
         version: &str,
     ) -> Result<Option<String>>;
 
-    /// List all versions of a flow
+    /// List all deployed versions for a flow
     async fn list_flow_versions(&self, flow_name: &str) -> Result<Vec<FlowSnapshot>>;
+
+    /// Get the most recently deployed version from history (for enable)
+    async fn get_latest_deployed_version_from_history(
+        &self,
+        flow_name: &str,
+    ) -> Result<Option<String>>;
+
+    /// Remove deployed version pointer (for disable)
+    async fn unset_deployed_version(&self, flow_name: &str) -> Result<()>;
 }
 
 /// OAuth storage for credentials, providers, clients, and tokens

@@ -152,41 +152,6 @@ impl StateStorage for MemoryStorage {
 
 #[async_trait]
 impl FlowStorage for MemoryStorage {
-    // Flow management methods
-    async fn save_flow(&self, name: &str, content: &str, version: Option<&str>) -> Result<()> {
-        self.flows.insert(name.to_string(), content.to_string());
-
-        // Also save to version history if version is provided
-        if let Some(v) = version {
-            let snapshot = FlowSnapshot {
-                flow_name: name.to_string(),
-                version: v.to_string(),
-                deployed_at: Utc::now(),
-                is_live: false,
-            };
-            self.flow_versions
-                .entry(name.to_string())
-                .or_default()
-                .push(snapshot);
-        }
-
-        Ok(())
-    }
-
-    async fn get_flow(&self, name: &str) -> Result<Option<String>> {
-        Ok(self.flows.get(name).map(|r| r.clone()))
-    }
-
-    async fn list_flows(&self) -> Result<Vec<String>> {
-        Ok(self.flows.iter().map(|r| r.key().clone()).collect())
-    }
-
-    async fn delete_flow(&self, name: &str) -> Result<()> {
-        self.flows.remove(name);
-        self.flow_versions.remove(name);
-        Ok(())
-    }
-
     // Flow versioning methods
     async fn deploy_flow_version(
         &self,
@@ -252,6 +217,32 @@ impl FlowStorage for MemoryStorage {
         // Sort by deployed_at descending
         snapshots.sort_unstable_by(|a, b| b.deployed_at.cmp(&a.deployed_at));
         Ok(snapshots)
+    }
+
+    async fn get_latest_deployed_version_from_history(
+        &self,
+        flow_name: &str,
+    ) -> Result<Option<String>> {
+        let snapshots = self
+            .flow_versions
+            .get(flow_name)
+            .map(|r| r.clone())
+            .unwrap_or_default();
+
+        // Find most recent by deployed_at, then by version (lexicographic) for tie-breaking
+        Ok(snapshots
+            .into_iter()
+            .max_by(|a, b| {
+                a.deployed_at
+                    .cmp(&b.deployed_at)
+                    .then_with(|| a.version.cmp(&b.version))
+            })
+            .map(|s| s.version))
+    }
+
+    async fn unset_deployed_version(&self, flow_name: &str) -> Result<()> {
+        self.deployed_versions.remove(flow_name);
+        Ok(())
     }
 }
 

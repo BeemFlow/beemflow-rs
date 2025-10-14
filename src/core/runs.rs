@@ -68,14 +68,35 @@ pub mod runs {
 
         async fn execute(&self, input: Self::Input) -> Result<Self::Output> {
             let event = input.event.unwrap_or_default();
+            let is_draft = input.draft.unwrap_or(false);
 
             // Get flow content
-            let content = self
-                .deps
-                .storage
-                .get_flow(&input.flow_name)
-                .await?
-                .ok_or_else(|| not_found("Flow", &input.flow_name))?;
+            let content = if is_draft {
+                // Draft mode: load from filesystem
+                let flows_dir = crate::config::get_flows_dir(&self.deps.config);
+                crate::storage::flows::get_flow(&flows_dir, &input.flow_name)
+                    .await?
+                    .ok_or_else(|| not_found("Flow", &input.flow_name))?
+            } else {
+                // Production mode: load from database (deployed version)
+                let version = self
+                    .deps
+                    .storage
+                    .get_deployed_version(&input.flow_name)
+                    .await?
+                    .ok_or_else(|| {
+                        BeemFlowError::not_found(
+                            "Deployed flow",
+                            format!("{} (use --draft to run from filesystem)", input.flow_name),
+                        )
+                    })?;
+
+                self.deps
+                    .storage
+                    .get_flow_version_content(&input.flow_name, &version)
+                    .await?
+                    .ok_or_else(|| not_found("Flow version", &version))?
+            };
 
             // Parse and execute flow
             let flow = parse_string(&content, None)?;
