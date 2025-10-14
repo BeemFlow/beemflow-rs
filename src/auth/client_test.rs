@@ -1,7 +1,7 @@
 
 use super::*;
 use crate::registry::RegistryManager;
-use crate::storage::{MemoryStorage, OAuthStorage};
+use crate::storage::{SqliteStorage, OAuthStorage};
 
 fn create_test_credential() -> OAuthCredential {
     OAuthCredential {
@@ -19,7 +19,7 @@ fn create_test_credential() -> OAuthCredential {
 
 #[tokio::test]
 async fn test_get_token_no_credential() {
-    let storage = Arc::new(MemoryStorage::new());
+    let storage = Arc::new(SqliteStorage::new(":memory:").await.expect("Failed to create SQLite storage"));
     let registry_manager = Arc::new(RegistryManager::standard(None));
     let client = OAuthClientManager::new(
         storage,
@@ -34,7 +34,7 @@ async fn test_get_token_no_credential() {
 
 #[tokio::test]
 async fn test_get_token_valid() {
-    let storage = Arc::new(MemoryStorage::new());
+    let storage = Arc::new(SqliteStorage::new(":memory:").await.expect("Failed to create SQLite storage"));
     let registry_manager = Arc::new(RegistryManager::standard(None));
     let cred = create_test_credential();
 

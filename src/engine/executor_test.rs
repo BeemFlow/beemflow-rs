@@ -4,24 +4,28 @@ use crate::dsl::Templater;
 use crate::engine::Executor;
 use crate::event::EventBus;
 use crate::model::Step;
-use crate::storage::Storage;
+use crate::storage::{SqliteStorage, Storage};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-fn setup_executor() -> Executor {
+async fn setup_executor() -> Executor {
     let adapters = Arc::new(AdapterRegistry::new());
     adapters.register(Arc::new(CoreAdapter::new()));
     let templater = Arc::new(Templater::new());
     let event_bus: Arc<dyn EventBus> = Arc::new(crate::event::InProcEventBus::new());
-    let storage: Arc<dyn Storage> = Arc::new(crate::storage::MemoryStorage::new());
+    let storage: Arc<dyn Storage> = Arc::new(
+        SqliteStorage::new(":memory:")
+            .await
+            .expect("Failed to create SQLite storage"),
+    );
 
     Executor::new(adapters, templater, event_bus, storage, None, 1000)
 }
 
 #[tokio::test]
 async fn test_evaluate_condition() {
-    let executor = setup_executor();
+    let executor = setup_executor().await;
 
     let mut vars = HashMap::new();
     vars.insert("status".to_string(), Value::String("active".to_string()));
@@ -38,7 +42,7 @@ async fn test_evaluate_condition() {
 
 #[tokio::test]
 async fn test_parallel_block_execution() {
-    let executor = setup_executor();
+    let executor = setup_executor().await;
     let step_ctx = StepContext::new(HashMap::new(), HashMap::new(), HashMap::new());
 
     let step = Step {
@@ -81,7 +85,7 @@ async fn test_parallel_block_execution() {
 
 #[tokio::test]
 async fn test_parallel_block_with_error() {
-    let executor = setup_executor();
+    let executor = setup_executor().await;
     let step_ctx = StepContext::new(HashMap::new(), HashMap::new(), HashMap::new());
 
     let step = Step {
@@ -116,7 +120,7 @@ async fn test_parallel_block_with_error() {
 
 #[tokio::test]
 async fn test_foreach_sequential() {
-    let executor = setup_executor();
+    let executor = setup_executor().await;
 
     let mut vars = HashMap::new();
     vars.insert(
@@ -160,7 +164,7 @@ async fn test_foreach_sequential() {
 
 #[tokio::test]
 async fn test_foreach_parallel() {
-    let executor = setup_executor();
+    let executor = setup_executor().await;
 
     let mut vars = HashMap::new();
     vars.insert(
@@ -201,7 +205,7 @@ async fn test_foreach_parallel() {
 
 #[tokio::test]
 async fn test_foreach_empty_list() {
-    let executor = setup_executor();
+    let executor = setup_executor().await;
 
     let mut vars = HashMap::new();
     vars.insert("items".to_string(), Value::Array(vec![]));
@@ -232,7 +236,7 @@ async fn test_foreach_empty_list() {
 
 #[tokio::test]
 async fn test_retry_logic() {
-    let executor = setup_executor();
+    let executor = setup_executor().await;
 
     // Create a step that will fail and should not retry successfully
     let step = Step {
@@ -255,7 +259,7 @@ async fn test_retry_logic() {
 
 #[tokio::test]
 async fn test_conditional_skip() {
-    let executor = setup_executor();
+    let executor = setup_executor().await;
 
     let mut vars = HashMap::new();
     vars.insert("enabled".to_string(), Value::Bool(false));
@@ -287,7 +291,7 @@ async fn test_conditional_skip() {
 
 #[tokio::test]
 async fn test_wait_seconds() {
-    let executor = setup_executor();
+    let executor = setup_executor().await;
     let _step_ctx = StepContext::new(HashMap::new(), HashMap::new(), HashMap::new());
 
     let step = Step {

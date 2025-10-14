@@ -21,7 +21,7 @@ fn create_step(id: &str, use_tool: &str, text: &str) -> Step {
 
 #[tokio::test]
 async fn test_missing_adapter() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let flow = Flow {
         name: "test-flow".to_string().into(),
@@ -50,7 +50,7 @@ async fn test_missing_adapter() {
 
 #[tokio::test]
 async fn test_invalid_step_configuration() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let mut with = HashMap::new();
     with.insert("wrong_field".to_string(), json!("value"));
@@ -76,7 +76,7 @@ async fn test_invalid_step_configuration() {
 
 #[tokio::test]
 async fn test_template_rendering_error() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let mut with = HashMap::new();
     with.insert("text".to_string(), json!("{{ undefined_variable }}"));
@@ -99,7 +99,7 @@ async fn test_template_rendering_error() {
 
 #[tokio::test]
 async fn test_circular_dependency() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let mut with1 = HashMap::new();
     with1.insert("text".to_string(), json!("{{ steps.step2.output }}"));
@@ -133,7 +133,7 @@ async fn test_circular_dependency() {
 
 #[tokio::test]
 async fn test_error_in_catch_block() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let flow = Flow {
         name: "test-flow".to_string().into(),
@@ -160,7 +160,7 @@ async fn test_error_in_catch_block() {
 
 #[tokio::test]
 async fn test_foreach_with_invalid_expression() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let flow = Flow {
         name: "test-flow".to_string().into(),
@@ -180,7 +180,7 @@ async fn test_foreach_with_invalid_expression() {
 
 #[tokio::test]
 async fn test_retry_exhaustion() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let flow = Flow {
         name: "test-flow".to_string().into(),
@@ -204,7 +204,7 @@ async fn test_retry_exhaustion() {
 
 #[tokio::test]
 async fn test_parallel_block_partial_failure() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let flow = Flow {
         name: "test-flow".to_string().into(),
@@ -232,7 +232,7 @@ async fn test_parallel_block_partial_failure() {
 
 #[tokio::test]
 async fn test_empty_step_id() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let mut with = HashMap::new();
     with.insert("text".to_string(), json!("test"));
@@ -255,7 +255,7 @@ async fn test_empty_step_id() {
 
 #[tokio::test]
 async fn test_duplicate_step_ids() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let flow = Flow {
         name: "test-flow".to_string().into(),
@@ -277,7 +277,7 @@ async fn test_duplicate_step_ids() {
 
 #[tokio::test]
 async fn test_condition_evaluation() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let flow = Flow {
         name: "test-flow".to_string().into(),
@@ -302,7 +302,7 @@ async fn test_condition_evaluation() {
 
 #[tokio::test]
 async fn test_step_without_use_field() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let flow = Flow {
         name: "test-flow".to_string().into(),
@@ -326,7 +326,7 @@ async fn test_step_without_use_field() {
 
 #[tokio::test]
 async fn test_deeply_nested_steps() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let flow = Flow {
         name: "test-flow".to_string().into(),
@@ -351,7 +351,7 @@ async fn test_deeply_nested_steps() {
 
 #[tokio::test]
 async fn test_large_output_handling() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     // Create a very large string (100KB, not 1MB to keep tests fast)
     let large_text = "A".repeat(100 * 1024);
@@ -377,7 +377,7 @@ async fn test_large_output_handling() {
 
 #[tokio::test]
 async fn test_null_values_in_context() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let mut event = HashMap::new();
     event.insert("null_value".to_string(), json!(null));
@@ -403,7 +403,7 @@ async fn test_null_values_in_context() {
 
 #[tokio::test]
 async fn test_error_recovery_with_catch() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let flow = Flow {
         name: "test-flow".to_string().into(),
@@ -428,7 +428,7 @@ async fn test_error_recovery_with_catch() {
 
 #[tokio::test]
 async fn test_multiple_errors_sequentially() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let flow = Flow {
         name: "test-flow".to_string().into(),
@@ -456,7 +456,7 @@ async fn test_multiple_errors_sequentially() {
 
 #[tokio::test]
 async fn test_step_depends_on_failed_step() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
 
     let flow = Flow {
         name: "test-flow".to_string().into(),

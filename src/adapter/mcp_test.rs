@@ -2,12 +2,16 @@ use super::*;
 use crate::adapter::ExecutionContext;
 use crate::constants::ADAPTER_ID_MCP;
 use crate::model::McpServerConfig;
-use crate::storage::memory::MemoryStorage;
+use crate::storage::SqliteStorage;
 use std::sync::Arc;
 
 // Helper to create test execution context
-fn test_context() -> ExecutionContext {
-    ExecutionContext::new(Arc::new(MemoryStorage::new()))
+async fn test_context() -> ExecutionContext {
+    ExecutionContext::new(Arc::new(
+        SqliteStorage::new(":memory:")
+            .await
+            .expect("Failed to create in-memory SQLite storage"),
+    ))
 }
 
 #[test]
@@ -51,7 +55,7 @@ async fn test_mcp_adapter_missing_use() {
         m
     };
 
-    let result = adapter.execute(inputs, &test_context()).await;
+    let result = adapter.execute(inputs, &test_context().await).await;
     assert!(result.is_err(), "Should error when __use is missing");
     let err_msg = result.unwrap_err().to_string();
     assert!(
@@ -69,7 +73,7 @@ async fn test_mcp_adapter_invalid_use_type() {
         m
     };
 
-    let result = adapter.execute(inputs, &test_context()).await;
+    let result = adapter.execute(inputs, &test_context().await).await;
     assert!(result.is_err(), "Should error when __use is not a string");
 }
 
@@ -93,7 +97,7 @@ async fn test_mcp_adapter_invalid_format() {
             m
         };
 
-        let result = adapter.execute(inputs, &test_context()).await;
+        let result = adapter.execute(inputs, &test_context().await).await;
         assert!(
             result.is_err(),
             "Should error for invalid format: {}",
@@ -120,7 +124,7 @@ async fn test_mcp_adapter_unconfigured_server() {
         m
     };
 
-    let result = adapter.execute(inputs, &test_context()).await;
+    let result = adapter.execute(inputs, &test_context().await).await;
     assert!(result.is_err(), "Should error for unconfigured server");
     let err_msg = result.unwrap_err().to_string();
     assert!(

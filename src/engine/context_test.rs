@@ -1,6 +1,6 @@
 use crate::engine::{RunsAccess, StepContext, context::is_valid_identifier};
 use crate::model::{Run, RunStatus, StepRun, StepStatus};
-use crate::storage::{MemoryStorage, Storage};
+use crate::storage::{SqliteStorage, Storage};
 use chrono::Utc;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -51,7 +51,11 @@ fn test_is_valid_identifier() {
 
 #[tokio::test]
 async fn test_runs_access_previous() {
-    let storage = Arc::new(MemoryStorage::new()) as Arc<dyn Storage>;
+    let storage = Arc::new(
+        SqliteStorage::new(":memory:")
+            .await
+            .expect("Failed to create SQLite storage"),
+    ) as Arc<dyn Storage>;
 
     // Create a previous run
     let prev_run = Run {

@@ -1,27 +1,14 @@
 use super::*;
-use crate::core::{Dependencies, OperationRegistry};
-use crate::engine::Engine;
-use crate::event::InProcEventBus;
-use crate::registry::RegistryManager;
-use crate::storage::MemoryStorage;
+use crate::core::OperationRegistry;
+use crate::utils::TestEnvironment;
 use axum::http::StatusCode;
 
-fn create_test_state() -> AppState {
-    let storage = Arc::new(MemoryStorage::new());
-    let engine = Arc::new(Engine::for_testing());
-    let registry_manager = Arc::new(RegistryManager::standard(None));
-    let event_bus = Arc::new(InProcEventBus::new()) as Arc<dyn crate::event::EventBus>;
-    let config = Arc::new(crate::config::Config::default());
+async fn create_test_state() -> AppState {
+    let env = TestEnvironment::new().await;
+    let storage = env.deps.storage.clone();
+    let registry_manager = env.deps.registry_manager.clone();
 
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine,
-        registry_manager: registry_manager.clone(),
-        event_bus,
-        config,
-    };
-
-    let registry = Arc::new(OperationRegistry::new(deps));
+    let registry = Arc::new(OperationRegistry::new(env.deps));
     let session_store = Arc::new(session::SessionStore::new());
     let oauth_client = Arc::new(
         crate::auth::OAuthClientManager::new(
@@ -51,14 +38,14 @@ async fn test_health_endpoint() {
 
 #[tokio::test]
 async fn test_root_handler() {
-    let state = create_test_state();
+    let state = create_test_state().await;
     let result = state.registry.execute("root", json!({})).await;
     assert!(result.is_ok());
 }
 
 #[tokio::test]
 async fn test_list_flows_empty() {
-    let state = create_test_state();
+    let state = create_test_state().await;
     let result = state.registry.execute("list_flows", json!({})).await;
     assert!(result.is_ok());
     let result_val = result.unwrap();
@@ -67,7 +54,7 @@ async fn test_list_flows_empty() {
 
 #[tokio::test]
 async fn test_save_and_get_flow() {
-    let state = create_test_state();
+    let state = create_test_state().await;
 
     // Save a flow
     let flow_content = r#"
@@ -105,7 +92,7 @@ steps:
 
 #[tokio::test]
 async fn test_delete_flow() {
-    let state = create_test_state();
+    let state = create_test_state().await;
 
     // Save a flow first
     let flow_content = r#"
@@ -150,7 +137,7 @@ steps:
 
 #[tokio::test]
 async fn test_validate_flow_valid() {
-    let state = create_test_state();
+    let state = create_test_state().await;
 
     let flow_content = r#"
 name: valid-flow
@@ -174,7 +161,7 @@ steps:
 
 #[tokio::test]
 async fn test_validate_flow_invalid() {
-    let state = create_test_state();
+    let state = create_test_state().await;
 
     // Invalid YAML
     let invalid_content = "invalid: yaml: syntax: [[[";
@@ -189,7 +176,7 @@ async fn test_validate_flow_invalid() {
 
 #[tokio::test]
 async fn test_start_run() {
-    let state = create_test_state();
+    let state = create_test_state().await;
 
     // First save a flow
     let flow_content = r#"
@@ -227,7 +214,7 @@ steps:
 
 #[tokio::test]
 async fn test_get_run() {
-    let state = create_test_state();
+    let state = create_test_state().await;
 
     // Create and start a run
     let flow_content = r#"
@@ -266,14 +253,14 @@ steps:
 
 #[tokio::test]
 async fn test_list_runs() {
-    let state = create_test_state();
+    let state = create_test_state().await;
     let result = state.registry.execute("list_runs", json!({})).await;
     assert!(result.is_ok());
 }
 
 #[tokio::test]
 async fn test_publish_event() {
-    let state = create_test_state();
+    let state = create_test_state().await;
 
     let input = json!({
         "topic": "test.event",
@@ -288,14 +275,14 @@ async fn test_publish_event() {
 
 #[tokio::test]
 async fn test_list_tools() {
-    let state = create_test_state();
+    let state = create_test_state().await;
     let result = state.registry.execute("list_tools", json!({})).await;
     assert!(result.is_ok());
 }
 
 #[tokio::test]
 async fn test_get_nonexistent_flow() {
-    let state = create_test_state();
+    let state = create_test_state().await;
     let input = json!({
         "name": "nonexistent-flow"
     });

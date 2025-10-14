@@ -227,7 +227,7 @@ pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
     // Get limits from config
     let limits = config.get_limits();
 
-    // Create engine with shared storage (NOT Engine::default() which uses MemoryStorage)
+    // Create engine with shared storage
     let engine = Arc::new(Engine::new(
         adapters,
         mcp_adapter,

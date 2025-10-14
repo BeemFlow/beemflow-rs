@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 #[tokio::test]
 async fn test_engine_creation() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let adapters = engine.adapters.all();
     assert!(!adapters.is_empty());
 
@@ -59,7 +59,7 @@ fn test_adapter_registration() {
 
 #[tokio::test]
 async fn test_execute_minimal_valid_flow() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let flow = Flow {
         name: "test".to_string().into(),
         description: None,
@@ -90,7 +90,7 @@ async fn test_execute_minimal_valid_flow() {
 
 #[tokio::test]
 async fn test_execute_empty_steps() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let flow = Flow {
         name: "empty".to_string().into(),
         description: None,
@@ -114,7 +114,7 @@ async fn test_execute_empty_steps() {
 
 #[tokio::test]
 async fn test_execute_with_event_data() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let flow = Flow {
         name: "event_test".to_string().into(),
         description: None,
@@ -148,7 +148,7 @@ async fn test_execute_with_event_data() {
 
 #[tokio::test]
 async fn test_execute_with_vars() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let flow = Flow {
         name: "vars_test".to_string().into(),
         description: None,
@@ -189,7 +189,7 @@ async fn test_execute_with_vars() {
 
 #[tokio::test]
 async fn test_execute_step_output_chaining() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let flow = Flow {
         name: "chaining_test".to_string().into(),
         description: None,
@@ -240,7 +240,7 @@ async fn test_execute_step_output_chaining() {
 
 #[tokio::test]
 async fn test_execute_concurrent_flows() {
-    let engine = Arc::new(Engine::for_testing());
+    let engine = Arc::new(Engine::for_testing().await);
     let flow = Arc::new(Flow {
         name: "concurrent".to_string().into(),
         description: None,
@@ -284,7 +284,7 @@ async fn test_execute_concurrent_flows() {
 
 #[tokio::test]
 async fn test_execute_catch_block() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let flow = Flow {
         name: "catch_test".to_string().into(),
         description: None,
@@ -337,17 +337,17 @@ async fn test_execute_catch_block() {
         .find(|r| r.flow_name.as_str() == "catch_test")
         .expect("Should have a catch_test run");
 
-    // Verify catch blocks were executed and recorded
-    assert!(
-        catch_run.steps.is_some(),
-        "Run should have step records for catch blocks"
-    );
+    // Fetch steps separately (they're in a separate table)
+    let steps = storage
+        .get_steps(catch_run.id)
+        .await
+        .expect("Failed to get steps");
 
-    let steps = catch_run.steps.as_ref().unwrap();
+    // Verify catch blocks were executed and recorded
     assert_eq!(steps.len(), 2, "Should have 2 catch block step records");
 
     // Verify catch1 step
-    let catch1 = steps
+    let catch1 = &steps
         .iter()
         .find(|s| s.step_name.as_str() == "catch1")
         .expect("Should have catch1 step record");
@@ -365,7 +365,7 @@ async fn test_execute_catch_block() {
     );
 
     // Verify catch2 step
-    let catch2 = steps
+    let catch2 = &steps
         .iter()
         .find(|s| s.step_name.as_str() == "catch2")
         .expect("Should have catch2 step record");
@@ -385,7 +385,7 @@ async fn test_execute_catch_block() {
 
 #[tokio::test]
 async fn test_execute_secrets_injection() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let flow = Flow {
         name: "secrets_test".to_string().into(),
         description: None,
@@ -429,7 +429,7 @@ async fn test_execute_secrets_injection() {
 
 #[tokio::test]
 async fn test_execute_secrets_dot_access() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let flow = Flow {
         name: "secrets_dot".to_string().into(),
         description: None,
@@ -482,7 +482,7 @@ async fn test_execute_secrets_dot_access() {
 
 #[tokio::test]
 async fn test_execute_array_access_in_template() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let flow = Flow {
         name: "array_access".to_string().into(),
         description: None,
@@ -538,7 +538,7 @@ async fn test_execute_array_access_in_template() {
 
 #[tokio::test]
 async fn test_adapter_error_propagation() {
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let flow = Flow {
         name: "adapter_error".to_string().into(),
         description: None,
@@ -570,7 +570,7 @@ async fn test_environment_variables_in_templates() {
         std::env::set_var("BEEMFLOW_TEST_TOKEN", "secret_token_456");
     }
 
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let flow = Flow {
         name: "env_test".to_string().into(),
         description: None,
@@ -620,9 +620,9 @@ async fn test_environment_variables_in_templates() {
     }
 }
 
-#[test]
-fn test_generate_deterministic_run_id() {
-    let engine = Engine::for_testing();
+#[tokio::test]
+async fn test_generate_deterministic_run_id() {
+    let engine = Engine::for_testing().await;
     let flow_name = "test-flow";
     let event: HashMap<String, serde_json::Value> = {
         let mut m = HashMap::new();
@@ -696,9 +696,9 @@ fn test_generate_deterministic_run_id() {
     );
 }
 
-#[test]
-fn test_generate_deterministic_run_id_time_window() {
-    let engine = Engine::for_testing();
+#[tokio::test]
+async fn test_generate_deterministic_run_id_time_window() {
+    let engine = Engine::for_testing().await;
     // Verify that UUIDs within the same minute window are identical
     let flow_name = "test-flow";
     let event: HashMap<String, serde_json::Value> = {
@@ -729,7 +729,7 @@ async fn test_await_event_resume_roundtrip() {
     let flow = parse_string(&flow_content, None).expect("Failed to parse flow");
 
     // Create engine with default settings
-    let engine = Arc::new(Engine::for_testing());
+    let engine = Arc::new(Engine::for_testing().await);
 
     // Start the flow with input and token
     let mut start_event = HashMap::new();

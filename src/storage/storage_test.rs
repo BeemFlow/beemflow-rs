@@ -333,30 +333,6 @@ async fn test_multiple_steps<S: Storage>(storage: Arc<S>) {
 }
 
 #[tokio::test]
-async fn test_memory_storage_all_operations() {
-    let storage = Arc::new(MemoryStorage::new());
-    test_all_storage_operations(storage).await;
-}
-
-#[tokio::test]
-async fn test_memory_storage_oauth() {
-    let storage = Arc::new(MemoryStorage::new());
-    test_oauth_credential_operations(storage).await;
-}
-
-#[tokio::test]
-async fn test_memory_storage_versioning() {
-    let storage = Arc::new(MemoryStorage::new());
-    test_flow_versioning_operations(storage).await;
-}
-
-#[tokio::test]
-async fn test_memory_storage_multiple_steps() {
-    let storage = Arc::new(MemoryStorage::new());
-    test_multiple_steps(storage).await;
-}
-
-#[tokio::test]
 async fn test_sqlite_storage_all_operations() {
     let storage = Arc::new(
         SqliteStorage::new(":memory:")
@@ -401,36 +377,6 @@ async fn test_sqlite_storage_multiple_steps() {
 // ========================================
 
 #[tokio::test]
-async fn test_memory_storage_stress_runs() {
-    let storage = Arc::new(MemoryStorage::new());
-
-    // Create 100 runs
-    for i in 0..100 {
-        let run = Run {
-            id: Uuid::new_v4(),
-            flow_name: format!("flow_{}", i % 10).into(),
-            event: HashMap::new(),
-            vars: HashMap::new(),
-            status: if i % 3 == 0 {
-                RunStatus::Succeeded
-            } else {
-                RunStatus::Running
-            },
-            started_at: Utc::now(),
-            ended_at: None,
-            steps: None,
-        };
-        storage
-            .save_run(&run)
-            .await
-            .expect("SaveRun should succeed");
-    }
-
-    let runs = storage.list_runs().await.expect("ListRuns should succeed");
-    assert_eq!(runs.len(), 100, "Expected 100 runs");
-}
-
-#[tokio::test]
 async fn test_sqlite_storage_stress_runs() {
     let storage = Arc::new(
         SqliteStorage::new(":memory:")
@@ -462,42 +408,6 @@ async fn test_sqlite_storage_stress_runs() {
 
     let runs = storage.list_runs().await.expect("ListRuns should succeed");
     assert_eq!(runs.len(), 100, "Expected 100 runs");
-}
-
-#[tokio::test]
-async fn test_memory_storage_concurrent_writes() {
-    let storage = Arc::new(MemoryStorage::new());
-
-    // Spawn 20 concurrent writers
-    let mut handles = vec![];
-    for i in 0..20 {
-        let storage_clone = storage.clone();
-        let handle = tokio::spawn(async move {
-            let run = Run {
-                id: Uuid::new_v4(),
-                flow_name: format!("concurrent_flow_{}", i).into(),
-                event: HashMap::new(),
-                vars: HashMap::new(),
-                status: RunStatus::Running,
-                started_at: Utc::now(),
-                ended_at: None,
-                steps: None,
-            };
-            storage_clone.save_run(&run).await
-        });
-        handles.push(handle);
-    }
-
-    // Wait for all writes
-    for handle in handles {
-        handle
-            .await
-            .unwrap()
-            .expect("Concurrent write should succeed");
-    }
-
-    let runs = storage.list_runs().await.expect("ListRuns should succeed");
-    assert_eq!(runs.len(), 20, "Expected 20 runs from concurrent writes");
 }
 
 #[tokio::test]
@@ -543,20 +453,6 @@ async fn test_sqlite_storage_concurrent_writes() {
 // ========================================
 // Error Handling Tests
 // ========================================
-
-#[tokio::test]
-async fn test_memory_storage_delete_nonexistent() {
-    let storage = Arc::new(MemoryStorage::new());
-    // Deleting non-existent items should not error
-    storage
-        .delete_run(Uuid::new_v4())
-        .await
-        .expect("Delete non-existent run should not error");
-    storage
-        .delete_oauth_credential("nonexistent")
-        .await
-        .expect("Delete non-existent cred should not error");
-}
 
 #[tokio::test]
 async fn test_sqlite_storage_delete_nonexistent() {

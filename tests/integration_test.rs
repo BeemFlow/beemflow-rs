@@ -16,7 +16,7 @@ async fn test_hello_world_flow() {
     assert!(Validator::validate(&flow).is_ok());
 
     // Execute it
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let result = engine.execute(&flow, HashMap::new()).await.unwrap();
     let outputs = result.outputs;
 
@@ -82,7 +82,7 @@ steps:
 "#;
 
     let flow = parse_string(yaml, None).unwrap();
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let result = engine.execute(&flow, HashMap::new()).await.unwrap();
     let outputs = result.outputs;
 
@@ -111,7 +111,7 @@ steps:
 "#;
 
     let flow = parse_string(yaml, None).unwrap();
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let result = engine.execute(&flow, HashMap::new()).await.unwrap();
     let outputs = result.outputs;
 
@@ -145,7 +145,7 @@ steps:
 "#;
 
     let flow = parse_string(yaml, None).unwrap();
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let result = engine.execute(&flow, HashMap::new()).await.unwrap();
     let outputs = result.outputs;
 
@@ -207,18 +207,21 @@ catch:
 
 #[tokio::test]
 async fn test_storage_operations() {
-    use beemflow::storage::MemoryStorage;
+    use beemflow::utils::TestEnvironment;
     use chrono::Utc;
     use uuid::Uuid;
 
-    let storage = MemoryStorage::new();
+    let env = TestEnvironment::new().await;
 
     // Test flow versioning
-    storage
+    env.deps
+        .storage
         .deploy_flow_version("test_flow", "1.0.0", "content")
         .await
         .unwrap();
-    let retrieved = storage
+    let retrieved = env
+        .deps
+        .storage
         .get_flow_version_content("test_flow", "1.0.0")
         .await
         .unwrap();
@@ -236,8 +239,8 @@ async fn test_storage_operations() {
         steps: None,
     };
 
-    storage.save_run(&run).await.unwrap();
-    let retrieved_run = storage.get_run(run.id).await.unwrap();
+    env.deps.storage.save_run(&run).await.unwrap();
+    let retrieved_run = env.deps.storage.get_run(run.id).await.unwrap();
     assert!(retrieved_run.is_some());
     assert_eq!(retrieved_run.unwrap().flow_name.as_str(), "test");
 }
@@ -304,38 +307,11 @@ fn test_graph_generation() {
 
 #[tokio::test]
 async fn test_cli_operations_with_fresh_database() {
-    use beemflow::config::Config;
-    use beemflow::core::{Dependencies, OperationRegistry};
-    use beemflow::engine::Engine;
-    use beemflow::event::InProcEventBus;
-    use beemflow::registry::RegistryManager;
-    use beemflow::storage::SqliteStorage;
-    use std::sync::Arc;
-    use tempfile::TempDir;
+    use beemflow::core::OperationRegistry;
+    use beemflow::utils::TestEnvironment;
 
-    // Create a temporary directory for the test database
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test_cli.db");
-
-    // Verify database doesn't exist
-    assert!(!db_path.exists(), "Database should not exist initially");
-
-    // Create storage with auto-creation
-    let storage = Arc::new(SqliteStorage::new(db_path.to_str().unwrap()).await.unwrap());
-
-    // Verify database was created
-    assert!(db_path.exists(), "Database should be auto-created");
-
-    // Create registry (simulating CLI initialization)
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(RegistryManager::standard(None)),
-        event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
-        config: Arc::new(Config::default()),
-    };
-
-    let registry = OperationRegistry::new(deps);
+    let env = TestEnvironment::new().await;
+    let registry = OperationRegistry::new(env.deps);
 
     // Test saving a flow
     let save_result = registry.execute("save_flow", serde_json::json!({
@@ -362,42 +338,13 @@ async fn test_cli_operations_with_fresh_database() {
 
 #[tokio::test]
 async fn test_mcp_server_with_fresh_database() {
-    use beemflow::config::Config;
-    use beemflow::core::{Dependencies, OperationRegistry};
-    use beemflow::engine::Engine;
-    use beemflow::event::InProcEventBus;
+    use beemflow::core::OperationRegistry;
     use beemflow::mcp::McpServer;
-    use beemflow::registry::RegistryManager;
-    use beemflow::storage::SqliteStorage;
+    use beemflow::utils::TestEnvironment;
     use std::sync::Arc;
-    use tempfile::TempDir;
 
-    // Create a temporary directory for the test database
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test_mcp.db");
-
-    // Verify database doesn't exist
-    assert!(!db_path.exists(), "Database should not exist initially");
-
-    // Create storage with auto-creation (simulating MCP server startup)
-    let storage = Arc::new(SqliteStorage::new(db_path.to_str().unwrap()).await.unwrap());
-
-    // Verify database was created
-    assert!(
-        db_path.exists(),
-        "Database should be auto-created on MCP startup"
-    );
-
-    // Create dependencies
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(RegistryManager::standard(None)),
-        event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
-        config: Arc::new(Config::default()),
-    };
-
-    let registry = Arc::new(OperationRegistry::new(deps));
+    let env = TestEnvironment::new().await;
+    let registry = Arc::new(OperationRegistry::new(env.deps));
 
     // Create MCP server - if this succeeds, the database is functional
     let _server = McpServer::new(registry.clone());
@@ -516,35 +463,11 @@ async fn test_cli_with_missing_parent_directory() {
 
 #[tokio::test]
 async fn test_draft_vs_production_run() {
-    use beemflow::config::Config;
-    use beemflow::core::{Dependencies, OperationRegistry};
-    use beemflow::engine::Engine;
-    use beemflow::event::InProcEventBus;
-    use beemflow::registry::RegistryManager;
-    use beemflow::storage::SqliteStorage;
-    use std::sync::Arc;
-    use tempfile::TempDir;
+    use beemflow::core::OperationRegistry;
+    use beemflow::utils::TestEnvironment;
 
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("draft_test.db");
-    let flows_dir = temp_dir.path().join("flows");
-
-    // Create config with custom flows directory
-    let config = Config {
-        flows_dir: Some(flows_dir.to_str().unwrap().to_string()),
-        ..Default::default()
-    };
-
-    let storage = Arc::new(SqliteStorage::new(db_path.to_str().unwrap()).await.unwrap());
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(RegistryManager::standard(None)),
-        event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
-        config: Arc::new(config),
-    };
-
-    let registry = OperationRegistry::new(deps);
+    let env = TestEnvironment::new().await;
+    let registry = OperationRegistry::new(env.deps);
 
     // Step 1: Save a draft flow to filesystem
     let flow_content = r#"name: draft_test
@@ -684,33 +607,11 @@ steps:
 
 #[tokio::test]
 async fn test_deploy_flow_without_version() {
-    use beemflow::config::Config;
-    use beemflow::core::{Dependencies, OperationRegistry};
-    use beemflow::engine::Engine;
-    use beemflow::event::InProcEventBus;
-    use beemflow::registry::RegistryManager;
-    use beemflow::storage::MemoryStorage;
-    use std::sync::Arc;
-    use tempfile::TempDir;
+    use beemflow::core::OperationRegistry;
+    use beemflow::utils::TestEnvironment;
 
-    let temp_dir = TempDir::new().unwrap();
-    let flows_dir = temp_dir.path().join("flows");
-
-    let config = Config {
-        flows_dir: Some(flows_dir.to_str().unwrap().to_string()),
-        ..Default::default()
-    };
-
-    let storage = Arc::new(MemoryStorage::new());
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(RegistryManager::standard(None)),
-        event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
-        config: Arc::new(config),
-    };
-
-    let registry = OperationRegistry::new(deps);
+    let env = TestEnvironment::new().await;
+    let registry = OperationRegistry::new(env.deps);
 
     // Save a flow WITHOUT version field
     let flow_content = r#"name: no_version_flow
@@ -755,34 +656,12 @@ steps:
 
 #[tokio::test]
 async fn test_rollback_workflow() {
-    use beemflow::config::Config;
-    use beemflow::core::{Dependencies, OperationRegistry};
-    use beemflow::engine::Engine;
-    use beemflow::event::InProcEventBus;
-    use beemflow::registry::RegistryManager;
-    use beemflow::storage::SqliteStorage;
-    use std::sync::Arc;
-    use tempfile::TempDir;
+    use beemflow::core::OperationRegistry;
+    use beemflow::utils::TestEnvironment;
 
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("rollback_test.db");
-    let flows_dir = temp_dir.path().join("flows");
-
-    let config = Config {
-        flows_dir: Some(flows_dir.to_str().unwrap().to_string()),
-        ..Default::default()
-    };
-
-    let storage = Arc::new(SqliteStorage::new(db_path.to_str().unwrap()).await.unwrap());
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(RegistryManager::standard(None)),
-        event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
-        config: Arc::new(config),
-    };
-
-    let registry = OperationRegistry::new(deps);
+    let env = TestEnvironment::new().await;
+    let storage = env.deps.storage.clone();
+    let registry = OperationRegistry::new(env.deps);
 
     // Deploy version 1.0.0
     let v1_content = r#"name: rollback_flow
@@ -884,34 +763,12 @@ steps:
 
 #[tokio::test]
 async fn test_disable_enable_flow() {
-    use beemflow::config::Config;
-    use beemflow::core::{Dependencies, OperationRegistry};
-    use beemflow::engine::Engine;
-    use beemflow::event::InProcEventBus;
-    use beemflow::registry::RegistryManager;
-    use beemflow::storage::SqliteStorage;
-    use std::sync::Arc;
-    use tempfile::TempDir;
+    use beemflow::core::OperationRegistry;
+    use beemflow::utils::TestEnvironment;
 
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("disable_enable_test.db");
-    let flows_dir = temp_dir.path().join("flows");
-
-    let config = Config {
-        flows_dir: Some(flows_dir.to_str().unwrap().to_string()),
-        ..Default::default()
-    };
-
-    let storage = Arc::new(SqliteStorage::new(db_path.to_str().unwrap()).await.unwrap());
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(RegistryManager::standard(None)),
-        event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
-        config: Arc::new(config),
-    };
-
-    let registry = OperationRegistry::new(deps);
+    let env = TestEnvironment::new().await;
+    let storage = env.deps.storage.clone();
+    let registry = OperationRegistry::new(env.deps);
 
     // Save and deploy a flow
     let flow_content = r#"name: disable_enable_test
@@ -1022,34 +879,12 @@ steps:
 
 #[tokio::test]
 async fn test_disable_enable_prevents_rollback() {
-    use beemflow::config::Config;
-    use beemflow::core::{Dependencies, OperationRegistry};
-    use beemflow::engine::Engine;
-    use beemflow::event::InProcEventBus;
-    use beemflow::registry::RegistryManager;
-    use beemflow::storage::SqliteStorage;
-    use std::sync::Arc;
-    use tempfile::TempDir;
+    use beemflow::core::OperationRegistry;
+    use beemflow::utils::TestEnvironment;
 
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("no_rollback_test.db");
-    let flows_dir = temp_dir.path().join("flows");
-
-    let config = Config {
-        flows_dir: Some(flows_dir.to_str().unwrap().to_string()),
-        ..Default::default()
-    };
-
-    let storage = Arc::new(SqliteStorage::new(db_path.to_str().unwrap()).await.unwrap());
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(RegistryManager::standard(None)),
-        event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
-        config: Arc::new(config),
-    };
-
-    let registry = OperationRegistry::new(deps);
+    let env = TestEnvironment::new().await;
+    let storage = env.deps.storage.clone();
+    let registry = OperationRegistry::new(env.deps);
 
     // Deploy v1.0.0
     let v1_content = r#"name: no_rollback_test
@@ -1158,34 +993,11 @@ steps:
 
 #[tokio::test]
 async fn test_disable_draft_still_works() {
-    use beemflow::config::Config;
-    use beemflow::core::{Dependencies, OperationRegistry};
-    use beemflow::engine::Engine;
-    use beemflow::event::InProcEventBus;
-    use beemflow::registry::RegistryManager;
-    use beemflow::storage::SqliteStorage;
-    use std::sync::Arc;
-    use tempfile::TempDir;
+    use beemflow::core::OperationRegistry;
+    use beemflow::utils::TestEnvironment;
 
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("draft_works_test.db");
-    let flows_dir = temp_dir.path().join("flows");
-
-    let config = Config {
-        flows_dir: Some(flows_dir.to_str().unwrap().to_string()),
-        ..Default::default()
-    };
-
-    let storage = Arc::new(SqliteStorage::new(db_path.to_str().unwrap()).await.unwrap());
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(RegistryManager::standard(None)),
-        event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
-        config: Arc::new(config),
-    };
-
-    let registry = OperationRegistry::new(deps);
+    let env = TestEnvironment::new().await;
+    let registry = OperationRegistry::new(env.deps);
 
     // Save, deploy, then disable
     let flow_content = r#"name: draft_works_test
@@ -1268,34 +1080,11 @@ steps:
 
 #[tokio::test]
 async fn test_restore_deployed_flow() {
-    use beemflow::config::Config;
-    use beemflow::core::{Dependencies, OperationRegistry};
-    use beemflow::engine::Engine;
-    use beemflow::event::InProcEventBus;
-    use beemflow::registry::RegistryManager;
-    use beemflow::storage::SqliteStorage;
-    use std::sync::Arc;
-    use tempfile::TempDir;
+    use beemflow::core::OperationRegistry;
+    use beemflow::utils::TestEnvironment;
 
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("restore_test.db");
-    let flows_dir = temp_dir.path().join("flows");
-
-    let config = Config {
-        flows_dir: Some(flows_dir.to_str().unwrap().to_string()),
-        ..Default::default()
-    };
-
-    let storage = Arc::new(SqliteStorage::new(db_path.to_str().unwrap()).await.unwrap());
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(RegistryManager::standard(None)),
-        event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
-        config: Arc::new(config),
-    };
-
-    let registry = OperationRegistry::new(deps);
+    let env = TestEnvironment::new().await;
+    let registry = OperationRegistry::new(env.deps);
 
     // Save and deploy a flow
     let flow_content = r#"name: restore_test
@@ -1375,34 +1164,11 @@ steps:
 
 #[tokio::test]
 async fn test_restore_disabled_flow() {
-    use beemflow::config::Config;
-    use beemflow::core::{Dependencies, OperationRegistry};
-    use beemflow::engine::Engine;
-    use beemflow::event::InProcEventBus;
-    use beemflow::registry::RegistryManager;
-    use beemflow::storage::SqliteStorage;
-    use std::sync::Arc;
-    use tempfile::TempDir;
+    use beemflow::core::OperationRegistry;
+    use beemflow::utils::TestEnvironment;
 
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("restore_disabled_test.db");
-    let flows_dir = temp_dir.path().join("flows");
-
-    let config = Config {
-        flows_dir: Some(flows_dir.to_str().unwrap().to_string()),
-        ..Default::default()
-    };
-
-    let storage = Arc::new(SqliteStorage::new(db_path.to_str().unwrap()).await.unwrap());
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(RegistryManager::standard(None)),
-        event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
-        config: Arc::new(config),
-    };
-
-    let registry = OperationRegistry::new(deps);
+    let env = TestEnvironment::new().await;
+    let registry = OperationRegistry::new(env.deps);
 
     // Save, deploy, then disable
     let flow_content = r#"name: restore_disabled_test
@@ -1473,34 +1239,11 @@ steps:
 
 #[tokio::test]
 async fn test_restore_specific_version() {
-    use beemflow::config::Config;
-    use beemflow::core::{Dependencies, OperationRegistry};
-    use beemflow::engine::Engine;
-    use beemflow::event::InProcEventBus;
-    use beemflow::registry::RegistryManager;
-    use beemflow::storage::SqliteStorage;
-    use std::sync::Arc;
-    use tempfile::TempDir;
+    use beemflow::core::OperationRegistry;
+    use beemflow::utils::TestEnvironment;
 
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("restore_specific_test.db");
-    let flows_dir = temp_dir.path().join("flows");
-
-    let config = Config {
-        flows_dir: Some(flows_dir.to_str().unwrap().to_string()),
-        ..Default::default()
-    };
-
-    let storage = Arc::new(SqliteStorage::new(db_path.to_str().unwrap()).await.unwrap());
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(RegistryManager::standard(None)),
-        event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
-        config: Arc::new(config),
-    };
-
-    let registry = OperationRegistry::new(deps);
+    let env = TestEnvironment::new().await;
+    let registry = OperationRegistry::new(env.deps);
 
     // Deploy v1.0.0
     let v1_content = r#"name: restore_specific_test
@@ -1614,34 +1357,11 @@ steps:
 
 #[tokio::test]
 async fn test_restore_nonexistent_flow() {
-    use beemflow::config::Config;
-    use beemflow::core::{Dependencies, OperationRegistry};
-    use beemflow::engine::Engine;
-    use beemflow::event::InProcEventBus;
-    use beemflow::registry::RegistryManager;
-    use beemflow::storage::SqliteStorage;
-    use std::sync::Arc;
-    use tempfile::TempDir;
+    use beemflow::core::OperationRegistry;
+    use beemflow::utils::TestEnvironment;
 
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("restore_nonexistent_test.db");
-    let flows_dir = temp_dir.path().join("flows");
-
-    let config = Config {
-        flows_dir: Some(flows_dir.to_str().unwrap().to_string()),
-        ..Default::default()
-    };
-
-    let storage = Arc::new(SqliteStorage::new(db_path.to_str().unwrap()).await.unwrap());
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(RegistryManager::standard(None)),
-        event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
-        config: Arc::new(config),
-    };
-
-    let registry = OperationRegistry::new(deps);
+    let env = TestEnvironment::new().await;
+    let registry = OperationRegistry::new(env.deps);
 
     // Try to restore non-existent flow
     let restore_result = registry
@@ -1666,34 +1386,11 @@ async fn test_restore_nonexistent_flow() {
 
 #[tokio::test]
 async fn test_restore_overwrites_draft() {
-    use beemflow::config::Config;
-    use beemflow::core::{Dependencies, OperationRegistry};
-    use beemflow::engine::Engine;
-    use beemflow::event::InProcEventBus;
-    use beemflow::registry::RegistryManager;
-    use beemflow::storage::SqliteStorage;
-    use std::sync::Arc;
-    use tempfile::TempDir;
+    use beemflow::core::OperationRegistry;
+    use beemflow::utils::TestEnvironment;
 
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("restore_overwrite_test.db");
-    let flows_dir = temp_dir.path().join("flows");
-
-    let config = Config {
-        flows_dir: Some(flows_dir.to_str().unwrap().to_string()),
-        ..Default::default()
-    };
-
-    let storage = Arc::new(SqliteStorage::new(db_path.to_str().unwrap()).await.unwrap());
-    let deps = Dependencies {
-        storage: storage.clone(),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(RegistryManager::standard(None)),
-        event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
-        config: Arc::new(config),
-    };
-
-    let registry = OperationRegistry::new(deps);
+    let env = TestEnvironment::new().await;
+    let registry = OperationRegistry::new(env.deps);
 
     // Save and deploy original flow
     let original_content = r#"name: restore_overwrite_test

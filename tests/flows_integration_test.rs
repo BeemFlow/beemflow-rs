@@ -50,7 +50,7 @@ async fn test_e2e_fetch_and_summarize() {
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let result = engine.execute(&flow, create_test_event()).await;
 
     assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
@@ -79,7 +79,7 @@ async fn test_e2e_parallel_openai() {
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let result = engine.execute(&flow, create_test_event()).await;
 
     assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
@@ -102,7 +102,7 @@ async fn test_e2e_airtable_integration() {
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let result = engine.execute(&flow, create_test_event()).await;
 
     // Note: This might fail if MCP server is not properly configured
@@ -131,7 +131,7 @@ async fn test_integration_http_patterns() {
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let result = engine.execute(&flow, create_test_event()).await;
 
     assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
@@ -170,7 +170,7 @@ async fn test_integration_nested_parallel() {
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let result = engine.execute(&flow, create_test_event()).await;
 
     assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
@@ -183,7 +183,7 @@ async fn test_integration_templating_system() {
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let result = engine.execute(&flow, create_test_event()).await;
 
     assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
@@ -200,7 +200,7 @@ async fn test_example_hello_world() {
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::for_testing();
+    let engine = Engine::for_testing().await;
     let result = engine.execute(&flow, create_test_event()).await;
 
     assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());

@@ -1,14 +1,18 @@
 use super::*;
 use crate::adapter::{CoreAdapter, ExecutionContext};
 use crate::constants::{CORE_CONVERT_OPENAPI, CORE_ECHO, CORE_LOG, CORE_WAIT, PARAM_SPECIAL_USE};
-use crate::storage::memory::MemoryStorage;
+use crate::storage::SqliteStorage;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 // Helper to create test execution context
-fn test_context() -> ExecutionContext {
-    ExecutionContext::new(Arc::new(MemoryStorage::new()))
+async fn test_context() -> ExecutionContext {
+    ExecutionContext::new(Arc::new(
+        SqliteStorage::new(":memory:")
+            .await
+            .expect("Failed to create in-memory SQLite storage"),
+    ))
 }
 
 // ========================================
@@ -40,7 +44,10 @@ async fn test_core_echo_basic() {
         Value::String("Hello, World!".to_string()),
     );
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     assert_eq!(
         result.get("text").unwrap().as_str().unwrap(),
         "Hello, World!"
@@ -61,7 +68,10 @@ async fn test_core_echo_complex_object() {
         serde_json::json!({"nested": "value", "count": 42}),
     );
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     assert!(result.get("text").unwrap().is_object());
 }
 
@@ -75,7 +85,10 @@ async fn test_core_echo_empty_text() {
     );
     inputs.insert("text".to_string(), Value::String("".to_string()));
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     assert_eq!(result.get("text").unwrap().as_str().unwrap(), "");
 }
 
@@ -89,7 +102,10 @@ async fn test_core_echo_nil_text() {
     );
     inputs.insert("text".to_string(), Value::Null);
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     assert!(result.get("text").unwrap().is_null());
 }
 
@@ -103,7 +119,10 @@ async fn test_core_echo_no_text() {
     );
     inputs.insert("other".to_string(), Value::String("value".to_string()));
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     assert_eq!(result.get("other").unwrap().as_str().unwrap(), "value");
     assert!(!result.contains_key("text"));
 }
@@ -119,7 +138,10 @@ async fn test_core_echo_non_string_text() {
     inputs.insert("text".to_string(), Value::Number(123.into()));
     inputs.insert("other".to_string(), Value::String("value".to_string()));
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     assert_eq!(result.get("text").unwrap().as_u64().unwrap(), 123);
 }
 
@@ -132,7 +154,10 @@ async fn test_core_echo_only_use_field() {
         Value::String(CORE_ECHO.to_string()),
     );
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     assert!(result.is_empty());
 }
 
@@ -147,7 +172,10 @@ async fn test_core_wait_basic() {
     inputs.insert("seconds".to_string(), Value::Number(0.into())); // Wait 0 for fast test
 
     let start = std::time::Instant::now();
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     let _elapsed = start.elapsed();
 
     assert_eq!(result.get("waited_seconds").unwrap().as_u64().unwrap(), 0);
@@ -168,7 +196,10 @@ async fn test_core_log_basic() {
     );
     inputs.insert("context".to_string(), serde_json::json!({"key": "value"}));
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     assert_eq!(result.get("level").unwrap().as_str().unwrap(), "info");
     assert_eq!(
         result.get("message").unwrap().as_str().unwrap(),
@@ -187,7 +218,7 @@ async fn test_missing_use_field() {
     let mut inputs = HashMap::new();
     inputs.insert("text".to_string(), Value::String("hello".to_string()));
 
-    let result = adapter.execute(inputs, &test_context()).await;
+    let result = adapter.execute(inputs, &test_context().await).await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("missing __use"));
 }
@@ -199,7 +230,7 @@ async fn test_empty_use_field() {
     inputs.insert(PARAM_SPECIAL_USE.to_string(), Value::String("".to_string()));
     inputs.insert("text".to_string(), Value::String("hello".to_string()));
 
-    let result = adapter.execute(inputs, &test_context()).await;
+    let result = adapter.execute(inputs, &test_context().await).await;
     assert!(result.is_err());
     // The error could be "missing __use" or "unknown core tool: "
     let err_msg = result.unwrap_err().to_string();
@@ -212,7 +243,7 @@ async fn test_invalid_use_type() {
     let mut inputs = HashMap::new();
     inputs.insert(PARAM_SPECIAL_USE.to_string(), Value::Number(123.into()));
 
-    let result = adapter.execute(inputs, &test_context()).await;
+    let result = adapter.execute(inputs, &test_context().await).await;
     assert!(result.is_err());
 }
 
@@ -225,7 +256,7 @@ async fn test_unknown_tool() {
         Value::String("core.unknown".to_string()),
     );
 
-    let result = adapter.execute(inputs, &test_context()).await;
+    let result = adapter.execute(inputs, &test_context().await).await;
     assert!(result.is_err());
     assert!(
         result
@@ -307,7 +338,7 @@ async fn test_core_adapter_real_execution() {
     ];
 
     for test in test_cases {
-        let result = adapter.execute(test.inputs, &test_context()).await;
+        let result = adapter.execute(test.inputs, &test_context().await).await;
 
         if test.want_err {
             assert!(result.is_err(), "Test '{}' should have failed", test.name);
@@ -358,7 +389,10 @@ async fn test_convert_openapi_json_string() {
         Value::String("https://custom.com".to_string()),
     );
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
 
     assert_eq!(
         result.get("api_name").and_then(|v| v.as_str()),
@@ -394,7 +428,10 @@ async fn test_convert_openapi_json_object() {
     );
     inputs.insert("openapi".to_string(), openapi_spec);
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     assert_eq!(result.get("api_name").and_then(|v| v.as_str()), Some("api"));
 }
 
@@ -408,7 +445,7 @@ async fn test_convert_openapi_missing_openapi() {
     );
     inputs.insert("api_name".to_string(), Value::String("test".to_string()));
 
-    let result = adapter.execute(inputs, &test_context()).await;
+    let result = adapter.execute(inputs, &test_context().await).await;
     assert!(result.is_err());
     assert!(
         result
@@ -431,7 +468,7 @@ async fn test_convert_openapi_invalid_json() {
         Value::String("invalid json{".to_string()),
     );
 
-    let result = adapter.execute(inputs, &test_context()).await;
+    let result = adapter.execute(inputs, &test_context().await).await;
     assert!(result.is_err());
     assert!(
         result
@@ -454,7 +491,7 @@ async fn test_convert_openapi_no_paths() {
         Value::String(r#"{"openapi": "3.0.0", "info": {"title": "Test"}}"#.to_string()),
     );
 
-    let result = adapter.execute(inputs, &test_context()).await;
+    let result = adapter.execute(inputs, &test_context().await).await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("no paths found"));
 }
@@ -521,7 +558,10 @@ async fn test_convert_openapi_complex_spec() {
     );
     inputs.insert("api_name".to_string(), Value::String("complex".to_string()));
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     let manifests = result.get("manifests").and_then(|v| v.as_array()).unwrap();
     assert_eq!(manifests.len(), 3);
 
@@ -557,7 +597,10 @@ async fn test_convert_openapi_default_base_url() {
     );
     inputs.insert("openapi".to_string(), Value::String(spec.to_string()));
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     assert_eq!(
         result.get("base_url").and_then(|v| v.as_str()),
         Some("https://extracted.com")
@@ -580,7 +623,10 @@ async fn test_convert_openapi_no_servers() {
     );
     inputs.insert("openapi".to_string(), Value::String(spec.to_string()));
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     assert_eq!(
         result.get("base_url").and_then(|v| v.as_str()),
         Some("https://api.example.com")
@@ -609,7 +655,10 @@ async fn test_convert_openapi_edge_cases() {
     );
     inputs.insert("openapi".to_string(), Value::String(spec.to_string()));
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     let manifests = result.get("manifests").and_then(|v| v.as_array()).unwrap();
     // Should only have 1 manifest (GET), invalid methods ignored
     assert_eq!(manifests.len(), 1);
@@ -640,7 +689,10 @@ async fn test_convert_openapi_malformed_paths() {
     );
     inputs.insert("openapi".to_string(), Value::String(spec.to_string()));
 
-    let result = adapter.execute(inputs, &test_context()).await.unwrap();
+    let result = adapter
+        .execute(inputs, &test_context().await)
+        .await
+        .unwrap();
     let manifests = result.get("manifests").and_then(|v| v.as_array()).unwrap();
     // Should only have 2 valid manifests (GET /valid and POST /invalid-operation)
     assert_eq!(manifests.len(), 2);
@@ -668,7 +720,7 @@ async fn test_adapter_concurrent_execution() {
                 Value::String(format!("concurrent {}", i)),
             );
 
-            adapter_clone.execute(inputs, &test_context()).await
+            adapter_clone.execute(inputs, &test_context().await).await
         });
         handles.push(handle);
     }

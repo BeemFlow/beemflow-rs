@@ -1,22 +1,9 @@
-use crate::engine::Engine;
-use crate::storage::MemoryStorage;
-use crate::registry::RegistryManager;
-use crate::event::InProcEventBus;
-use crate::config::Config;
+use crate::utils::TestEnvironment;
 
 #[tokio::test]
 async fn test_mcp_server_creation() {
-    let registry_manager = RegistryManager::new(Vec::new());
-    
-    let deps = Dependencies {
-        storage: Arc::new(MemoryStorage::new()),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(registry_manager),
-        event_bus: Arc::new(InProcEventBus::new()),
-        config: Arc::new(Config::default()),
-    };
-    
-    let ops = Arc::new(OperationRegistry::new(deps));
+    let env = TestEnvironment::new().await;
+    let ops = Arc::new(OperationRegistry::new(env.deps));
     let server = McpServer::new(ops);
     
     // Test tools list generation
@@ -27,17 +14,8 @@ async fn test_mcp_server_creation() {
 
 #[tokio::test]
 async fn test_handle_initialize() {
-    let registry_manager = RegistryManager::new(Vec::new());
-    
-    let deps = Dependencies {
-        storage: Arc::new(MemoryStorage::new()),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(registry_manager),
-        event_bus: Arc::new(InProcEventBus::new()),
-        config: Arc::new(Config::default()),
-    };
-    
-    let ops = Arc::new(OperationRegistry::new(deps));
+    let env = TestEnvironment::new().await;
+    let ops = Arc::new(OperationRegistry::new(env.deps));
     let server = McpServer::new(ops);
     
     // Test initialize request
@@ -62,17 +40,8 @@ async fn test_handle_initialize() {
 
 #[tokio::test]
 async fn test_handle_tools_list() {
-    let registry_manager = RegistryManager::new(Vec::new());
-    
-    let deps = Dependencies {
-        storage: Arc::new(MemoryStorage::new()),
-        engine: Arc::new(Engine::for_testing()),
-        registry_manager: Arc::new(registry_manager),
-        event_bus: Arc::new(InProcEventBus::new()),
-        config: Arc::new(Config::default()),
-    };
-    
-    let ops = Arc::new(OperationRegistry::new(deps));
+    let env = TestEnvironment::new().await;
+    let ops = Arc::new(OperationRegistry::new(env.deps));
     let server = McpServer::new(ops);
     
     // Initialize first

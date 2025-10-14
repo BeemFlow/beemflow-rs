@@ -485,17 +485,13 @@ impl Engine {
         }
 
         // Save catch block step records to storage
-        if !step_records.is_empty() {
-            // Fetch the current run to update it
-            if let Ok(Some(mut run)) = self.storage.get_run(run_id).await {
-                // Add catch block steps to the run
-                run.steps = Some(step_records);
-                // Save updated run
-                if let Err(e) = self.storage.save_run(&run).await {
-                    tracing::error!("Failed to save catch block outputs to run: {}", e);
-                }
-            } else {
-                tracing::warn!("Could not fetch run {} to save catch block outputs", run_id);
+        for step_record in step_records {
+            if let Err(e) = self.storage.save_step(&step_record).await {
+                tracing::error!(
+                    "Failed to save catch block step {}: {}",
+                    step_record.step_name,
+                    e
+                );
             }
         }
 
@@ -579,11 +575,17 @@ impl Engine {
         (!prev_data.is_empty()).then_some(prev_data)
     }
 
-    /// Create an engine for testing with MemoryStorage and default components
+    /// Create an engine for testing with in-memory SQLite storage
     ///
     /// This method should only be used in tests. For production, use `core::create_dependencies()`
     /// which initializes the engine with proper configuration.
-    pub fn for_testing() -> Self {
+    ///
+    /// For tests that need isolated environments, use `beemflow::utils::TestEnvironment` instead.
+    pub async fn for_testing() -> Self {
+        let storage = crate::storage::SqliteStorage::new(":memory:")
+            .await
+            .expect("Failed to create in-memory SQLite storage");
+
         let adapters = Arc::new(AdapterRegistry::new());
 
         // Register core adapters
@@ -605,7 +607,7 @@ impl Engine {
             mcp_adapter,
             Arc::new(Templater::new()),
             Arc::new(crate::event::InProcEventBus::new()),
-            Arc::new(crate::storage::MemoryStorage::new()),
+            Arc::new(storage),
             1000, // Default max concurrent tasks for testing
         )
     }

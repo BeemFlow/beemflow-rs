@@ -10,7 +10,6 @@
 //! - `Storage`: Composition trait implementing all of the above
 
 pub mod flows; // Pure functions for filesystem flow operations
-pub mod memory;
 pub mod postgres;
 pub mod sql_common;
 pub mod sqlite;
@@ -210,7 +209,6 @@ pub struct FlowSnapshot {
     pub is_live: bool,
 }
 
-pub use memory::MemoryStorage;
 pub use postgres::PostgresStorage;
 pub use sqlite::SqliteStorage;
 
@@ -219,18 +217,15 @@ pub async fn create_storage_from_config(
     config: &crate::config::StorageConfig,
 ) -> crate::Result<Arc<dyn Storage>> {
     match config.driver.as_str() {
-        "memory" => Ok(Arc::new(MemoryStorage::new())),
         "sqlite" => Ok(Arc::new(SqliteStorage::new(&config.dsn).await?)),
         "postgres" => Ok(Arc::new(PostgresStorage::new(&config.dsn).await?)),
         _ => Err(crate::BeemFlowError::config(format!(
-            "Unknown storage driver: {}. Supported: memory, sqlite, postgres",
+            "Unknown storage driver: {}. Supported: sqlite, postgres",
             config.driver
         ))),
     }
 }
 
-#[cfg(test)]
-mod memory_test;
 #[cfg(test)]
 mod postgres_test;
 #[cfg(test)]

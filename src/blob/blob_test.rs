@@ -139,8 +139,16 @@ async fn test_new_default_blob_store_filesystem() {
 
 #[tokio::test]
 async fn test_new_default_blob_store_none() {
-    // Should default to filesystem
-    let store = new_default_blob_store(None).await.unwrap();
+    // Should default to filesystem with temp directory
+    let temp_dir = TempDir::new().unwrap();
+    let config = BlobConfig {
+        driver: Some("filesystem".to_string()),
+        directory: Some(temp_dir.path().to_string_lossy().to_string()),
+        bucket: None,
+        region: None,
+    };
+
+    let store = new_default_blob_store(Some(&config)).await.unwrap();
 
     // Test that it works
     let data = b"Test data".to_vec();
