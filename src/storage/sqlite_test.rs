@@ -9,7 +9,7 @@ async fn test_save_and_get_run() {
     let storage = SqliteStorage::new(":memory:").await.unwrap();
     let run = Run {
         id: Uuid::new_v4(),
-        flow_name: "test".to_string(),
+        flow_name: "test".to_string().into(),
         event: HashMap::new(),
         vars: HashMap::new(),
         status: RunStatus::Running,
@@ -21,7 +21,7 @@ async fn test_save_and_get_run() {
     storage.save_run(&run).await.unwrap();
     let retrieved = storage.get_run(run.id).await.unwrap();
     assert!(retrieved.is_some());
-    assert_eq!(retrieved.unwrap().flow_name, "test");
+    assert_eq!(retrieved.unwrap().flow_name.as_str(), "test");
 }
 
 #[tokio::test]
@@ -108,7 +108,7 @@ async fn test_all_operations_comprehensive() {
     // Add a run
     let run = Run {
         id: run_id,
-        flow_name: "test_flow".to_string(),
+        flow_name: "test_flow".to_string().into(),
         event: {
             let mut m = HashMap::new();
             m.insert("key".to_string(), serde_json::json!("value"));
@@ -127,7 +127,10 @@ async fn test_all_operations_comprehensive() {
     let retrieved_run = storage.get_run(run_id).await.unwrap();
     assert!(retrieved_run.is_some(), "Should find saved run");
     assert_eq!(retrieved_run.as_ref().unwrap().id, run_id);
-    assert_eq!(retrieved_run.as_ref().unwrap().flow_name, "test_flow");
+    assert_eq!(
+        retrieved_run.as_ref().unwrap().flow_name.as_str(),
+        "test_flow"
+    );
 
     // Test GetRun with non-existent ID
     let non_existent_id = Uuid::new_v4();
@@ -139,7 +142,7 @@ async fn test_all_operations_comprehensive() {
     let step = StepRun {
         id: step_id,
         run_id,
-        step_name: "test_step".to_string(),
+        step_name: "test_step".to_string().into(),
         status: StepStatus::Succeeded,
         outputs: Some({
             let mut m = HashMap::new();
@@ -156,7 +159,7 @@ async fn test_all_operations_comprehensive() {
     let steps = storage.get_steps(run_id).await.unwrap();
     assert_eq!(steps.len(), 1, "Expected 1 step");
     assert_eq!(steps[0].id, step_id);
-    assert_eq!(steps[0].step_name, "test_step");
+    assert_eq!(steps[0].step_name.as_str(), "test_step");
 
     // Test RegisterWait and ResolveWait
     let token = Uuid::new_v4();
@@ -193,7 +196,7 @@ async fn test_save_step_for_non_existent_run() {
     let step = StepRun {
         id: Uuid::new_v4(),
         run_id: Uuid::new_v4(), // Non-existent run
-        step_name: "test_step".to_string(),
+        step_name: "test_step".to_string().into(),
         status: StepStatus::Running,
         outputs: Some(HashMap::new()),
         error: None,
@@ -215,7 +218,7 @@ async fn test_list_runs_multiple() {
     for i in 0..5 {
         let run = Run {
             id: Uuid::new_v4(),
-            flow_name: format!("flow_{}", i),
+            flow_name: format!("flow_{}", i).into(),
             event: HashMap::new(),
             vars: HashMap::new(),
             status: RunStatus::Succeeded,
@@ -380,7 +383,7 @@ async fn test_multiple_steps_same_run() {
     let run_id = Uuid::new_v4();
     let run = Run {
         id: run_id,
-        flow_name: "multi_step_flow".to_string(),
+        flow_name: "multi_step_flow".to_string().into(),
         event: HashMap::new(),
         vars: HashMap::new(),
         status: RunStatus::Running,
@@ -395,7 +398,7 @@ async fn test_multiple_steps_same_run() {
         let step = StepRun {
             id: Uuid::new_v4(),
             run_id,
-            step_name: format!("step_{}", i),
+            step_name: format!("step_{}", i).into(),
             status: StepStatus::Succeeded,
             outputs: Some(HashMap::new()),
             error: None,
@@ -436,7 +439,7 @@ async fn test_auto_create_database_file() {
     // Verify it's functional - try to save a run
     let run = Run {
         id: Uuid::new_v4(),
-        flow_name: "test".to_string(),
+        flow_name: "test".to_string().into(),
         event: HashMap::new(),
         vars: HashMap::new(),
         status: RunStatus::Running,

@@ -29,10 +29,8 @@ struct JsonRpcRequest {
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcResponse {
-    #[allow(dead_code)]
-    jsonrpc: String,
-    #[allow(dead_code)]
-    id: i64,
+    _jsonrpc: String,
+    _id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -43,23 +41,42 @@ struct JsonRpcResponse {
 struct JsonRpcError {
     code: i32,
     message: String,
-    #[allow(dead_code)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<Value>,
+    _data: Option<Value>,
 }
 
 /// MCP server process instance
 pub struct McpServer {
-    #[allow(dead_code)]
-    process: Arc<Mutex<Child>>,
+    /// Holds the child process (keeps it alive until dropped)
+    _process: Arc<Mutex<Child>>,
     stdin: Arc<Mutex<ChildStdin>>,
     stdout: Arc<Mutex<BufReader<ChildStdout>>>,
     tools: Arc<RwLock<HashMap<String, McpTool>>>,
     next_id: Arc<Mutex<i64>>,
 }
 
+/// Validate MCP command configuration
+///
+/// Note: We trust the user's configuration file. If they explicitly configure
+/// a command to run, we allow it. The security boundary is that users control
+/// their own config files, not untrusted input.
+fn validate_mcp_command(command: &str) -> Result<()> {
+    // Just validate that the command is not empty
+    if command.trim().is_empty() {
+        return Err(BeemFlowError::validation("MCP command cannot be empty"));
+    }
+
+    // Log for debugging
+    tracing::debug!("MCP server command: {}", command);
+
+    Ok(())
+}
+
 impl McpServer {
     async fn start(name: &str, config: &McpServerConfig) -> Result<Self> {
+        // Validate command before spawning
+        validate_mcp_command(&config.command)?;
+
         let mut cmd = Command::new(&config.command);
 
         if let Some(ref args) = config.args {
@@ -93,7 +110,7 @@ impl McpServer {
             .ok_or_else(|| BeemFlowError::adapter("Failed to get stdout"))?;
 
         let server = Self {
-            process: Arc::new(Mutex::new(process)),
+            _process: Arc::new(Mutex::new(process)),
             stdin: Arc::new(Mutex::new(stdin)),
             stdout: Arc::new(Mutex::new(BufReader::new(stdout))),
             tools: Arc::new(RwLock::new(HashMap::new())),

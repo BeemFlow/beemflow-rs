@@ -7,7 +7,7 @@ async fn test_all_storage_operations<S: Storage>(storage: Arc<S>) {
     let run_id = Uuid::new_v4();
     let run = Run {
         id: run_id,
-        flow_name: "test_flow".to_string(),
+        flow_name: "test_flow".to_string().into(),
         event: {
             let mut m = HashMap::new();
             m.insert("key".to_string(), serde_json::json!("value"));
@@ -31,7 +31,7 @@ async fn test_all_storage_operations<S: Storage>(storage: Arc<S>) {
         .expect("GetRun should succeed");
     assert!(retrieved.is_some(), "Should find saved run");
     assert_eq!(retrieved.as_ref().unwrap().id, run_id);
-    assert_eq!(retrieved.unwrap().flow_name, "test_flow");
+    assert_eq!(retrieved.unwrap().flow_name.as_str(), "test_flow");
 
     // Test 2: GetRun with non-existent ID
     let non_existent_id = Uuid::new_v4();
@@ -46,7 +46,7 @@ async fn test_all_storage_operations<S: Storage>(storage: Arc<S>) {
     let step = StepRun {
         id: step_id,
         run_id,
-        step_name: "test_step".to_string(),
+        step_name: "test_step".to_string().into(),
         status: StepStatus::Succeeded,
         outputs: Some({
             let mut m = HashMap::new();
@@ -69,7 +69,7 @@ async fn test_all_storage_operations<S: Storage>(storage: Arc<S>) {
         .expect("GetSteps should succeed");
     assert_eq!(steps.len(), 1, "Expected 1 step");
     assert_eq!(steps[0].id, step_id);
-    assert_eq!(steps[0].step_name, "test_step");
+    assert_eq!(steps[0].step_name.as_str(), "test_step");
 
     // Test 4: RegisterWait and ResolveWait
     let token = Uuid::new_v4();
@@ -330,7 +330,7 @@ async fn test_multiple_steps<S: Storage>(storage: Arc<S>) {
     let run_id = Uuid::new_v4();
     let run = Run {
         id: run_id,
-        flow_name: "multi_step_flow".to_string(),
+        flow_name: "multi_step_flow".to_string().into(),
         event: HashMap::new(),
         vars: HashMap::new(),
         status: RunStatus::Running,
@@ -349,7 +349,7 @@ async fn test_multiple_steps<S: Storage>(storage: Arc<S>) {
         let step = StepRun {
             id: Uuid::new_v4(),
             run_id,
-            step_name: format!("step_{}", i),
+            step_name: format!("step_{}", i).into(),
             status: if i % 2 == 0 {
                 StepStatus::Succeeded
             } else {
@@ -485,7 +485,7 @@ async fn test_memory_storage_stress_runs() {
     for i in 0..100 {
         let run = Run {
             id: Uuid::new_v4(),
-            flow_name: format!("flow_{}", i % 10),
+            flow_name: format!("flow_{}", i % 10).into(),
             event: HashMap::new(),
             vars: HashMap::new(),
             status: if i % 3 == 0 {
@@ -519,7 +519,7 @@ async fn test_sqlite_storage_stress_runs() {
     for i in 0..100 {
         let run = Run {
             id: Uuid::new_v4(),
-            flow_name: format!("flow_{}", i % 10),
+            flow_name: format!("flow_{}", i % 10).into(),
             event: HashMap::new(),
             vars: HashMap::new(),
             status: if i % 3 == 0 {
@@ -552,7 +552,7 @@ async fn test_memory_storage_concurrent_writes() {
         let handle = tokio::spawn(async move {
             let run = Run {
                 id: Uuid::new_v4(),
-                flow_name: format!("concurrent_flow_{}", i),
+                flow_name: format!("concurrent_flow_{}", i).into(),
                 event: HashMap::new(),
                 vars: HashMap::new(),
                 status: RunStatus::Running,
@@ -592,7 +592,7 @@ async fn test_sqlite_storage_concurrent_writes() {
         let handle = tokio::spawn(async move {
             let run = Run {
                 id: Uuid::new_v4(),
-                flow_name: format!("concurrent_flow_{}", i),
+                flow_name: format!("concurrent_flow_{}", i).into(),
                 event: HashMap::new(),
                 vars: HashMap::new(),
                 status: RunStatus::Running,

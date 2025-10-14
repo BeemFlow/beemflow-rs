@@ -21,11 +21,18 @@ use std::collections::{HashMap, HashSet};
 pub struct DependencyAnalyzer {
     /// Regex to match {{ steps.step_id }} or {{ steps['step_id'] }}
     step_ref_regex: Regex,
+    /// Maximum recursion depth for nested structures (prevents stack overflow)
+    max_recursion_depth: usize,
 }
 
 impl DependencyAnalyzer {
-    /// Create a new dependency analyzer
+    /// Create a new dependency analyzer with default max recursion depth (1000)
     pub fn new() -> Self {
+        Self::with_max_depth(1000)
+    }
+
+    /// Create a new dependency analyzer with custom max recursion depth
+    pub fn with_max_depth(max_recursion_depth: usize) -> Self {
         Self {
             // Matches various forms:
             // - {{ steps.foo }}
@@ -36,11 +43,12 @@ impl DependencyAnalyzer {
                 r#"steps\.([a-zA-Z0-9_-]+)|steps\['([^']+)'\]|steps\["([^"]+)"\]"#,
             )
             .expect("step reference regex is valid"),
+            max_recursion_depth,
         }
     }
 
     /// Extract all step ID references from a template string
-    fn extract_step_refs(&self, template: &str) -> HashSet<String> {
+    pub(crate) fn extract_step_refs(&self, template: &str) -> HashSet<String> {
         let mut refs = HashSet::new();
 
         for cap in self.step_ref_regex.captures_iter(template) {
@@ -59,7 +67,21 @@ impl DependencyAnalyzer {
 
     /// Recursively extract step references from a JSON value
     fn extract_refs_from_value(&self, value: &Value) -> HashSet<String> {
+        self.extract_refs_from_value_depth(value, 0)
+    }
+
+    /// Extract step references with depth tracking to prevent stack overflow
+    fn extract_refs_from_value_depth(&self, value: &Value, depth: usize) -> HashSet<String> {
         let mut refs = HashSet::new();
+
+        // Enforce recursion depth limit
+        if depth > self.max_recursion_depth {
+            tracing::warn!(
+                "Maximum recursion depth ({}) exceeded in extract_refs_from_value",
+                self.max_recursion_depth
+            );
+            return refs;
+        }
 
         match value {
             Value::String(s) => {
@@ -67,12 +89,12 @@ impl DependencyAnalyzer {
             }
             Value::Array(arr) => {
                 for item in arr {
-                    refs.extend(self.extract_refs_from_value(item));
+                    refs.extend(self.extract_refs_from_value_depth(item, depth + 1));
                 }
             }
             Value::Object(obj) => {
                 for v in obj.values() {
-                    refs.extend(self.extract_refs_from_value(v));
+                    refs.extend(self.extract_refs_from_value_depth(v, depth + 1));
                 }
             }
             _ => {}
@@ -82,8 +104,23 @@ impl DependencyAnalyzer {
     }
 
     /// Analyze a single step to find all template-based dependencies
-    fn analyze_step(&self, step: &Step) -> HashSet<String> {
+    pub(crate) fn analyze_step(&self, step: &Step) -> HashSet<String> {
+        self.analyze_step_depth(step, 0)
+    }
+
+    /// Analyze a step with depth tracking to prevent stack overflow
+    fn analyze_step_depth(&self, step: &Step, depth: usize) -> HashSet<String> {
         let mut deps = HashSet::new();
+
+        // Enforce recursion depth limit
+        if depth > self.max_recursion_depth {
+            tracing::warn!(
+                "Maximum recursion depth ({}) exceeded in analyze_step for step '{}'",
+                self.max_recursion_depth,
+                step.id
+            );
+            return deps;
+        }
 
         // Check 'if' condition
         if let Some(ref condition) = step.if_ {
@@ -105,14 +142,14 @@ impl DependencyAnalyzer {
         // Recursively check nested steps (do blocks)
         if let Some(ref nested_steps) = step.do_ {
             for nested_step in nested_steps {
-                deps.extend(self.analyze_step(nested_step));
+                deps.extend(self.analyze_step_depth(nested_step, depth + 1));
             }
         }
 
         // Recursively check parallel blocks
         if let Some(ref parallel_steps) = step.steps {
             for parallel_step in parallel_steps {
-                deps.extend(self.analyze_step(parallel_step));
+                deps.extend(self.analyze_step_depth(parallel_step, depth + 1));
             }
         }
 
@@ -125,7 +162,7 @@ impl DependencyAnalyzer {
 
         for step in &flow.steps {
             let deps = self.analyze_step(step);
-            graph.insert(step.id.clone(), deps);
+            graph.insert(step.id.to_string(), deps);
         }
 
         graph
@@ -141,14 +178,14 @@ impl DependencyAnalyzer {
             } else {
                 HashSet::new()
             };
-            graph.insert(step.id.clone(), deps);
+            graph.insert(step.id.to_string(), deps);
         }
 
         graph
     }
 
     /// Merge automatic and manual dependencies
-    fn merge_dependencies(
+    pub(crate) fn merge_dependencies(
         &self,
         auto: HashMap<String, HashSet<String>>,
         manual: HashMap<String, HashSet<String>>,
@@ -175,7 +212,7 @@ impl DependencyAnalyzer {
         flow: &Flow,
         graph: &HashMap<String, HashSet<String>>,
     ) -> Result<()> {
-        let all_steps: HashSet<String> = flow.steps.iter().map(|s| s.id.clone()).collect();
+        let all_steps: HashSet<String> = flow.steps.iter().map(|s| s.id.to_string()).collect();
 
         for (step_id, deps) in graph {
             for dep in deps {
@@ -277,8 +314,8 @@ impl DependencyAnalyzer {
 
         // Visit all steps
         for step in &flow.steps {
-            if !visited.contains(&step.id) {
-                visit(&step.id, &graph, &mut visited, &mut sorted);
+            if !visited.contains(step.id.as_str()) {
+                visit(step.id.as_str(), &graph, &mut visited, &mut sorted);
             }
         }
 
@@ -337,210 +374,5 @@ impl DependencyAnalyzer {
 impl Default for DependencyAnalyzer {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn create_step(id: &str) -> Step {
-        Step {
-            id: id.to_string(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn test_extract_step_refs_dot_notation() {
-        let analyzer = DependencyAnalyzer::new();
-        let template = "Result: {{ steps.foo.output }}";
-        let refs = analyzer.extract_step_refs(template);
-        assert!(refs.contains("foo"));
-    }
-
-    #[test]
-    fn test_extract_step_refs_bracket_notation() {
-        let analyzer = DependencyAnalyzer::new();
-        let template = "Result: {{ steps['bar'].output }}";
-        let refs = analyzer.extract_step_refs(template);
-        assert!(refs.contains("bar"));
-    }
-
-    #[test]
-    fn test_extract_multiple_refs() {
-        let analyzer = DependencyAnalyzer::new();
-        let template = "{{ steps.a.x }} and {{ steps.b.y }} and {{ steps['c'].z }}";
-        let refs = analyzer.extract_step_refs(template);
-        assert_eq!(refs.len(), 3);
-        assert!(refs.contains("a"));
-        assert!(refs.contains("b"));
-        assert!(refs.contains("c"));
-    }
-
-    #[test]
-    fn test_analyze_step_with_template() {
-        let analyzer = DependencyAnalyzer::new();
-        let mut step = create_step("test");
-        let mut with = HashMap::new();
-        with.insert("text".to_string(), json!("{{ steps.foo.output }}"));
-        step.with = Some(with);
-
-        let deps = analyzer.analyze_step(&step);
-        assert!(deps.contains("foo"));
-    }
-
-    #[test]
-    fn test_merge_auto_and_manual_deps() {
-        let analyzer = DependencyAnalyzer::new();
-
-        let mut auto = HashMap::new();
-        auto.insert("step_a".to_string(), {
-            let mut set = HashSet::new();
-            set.insert("step_b".to_string());
-            set
-        });
-
-        let mut manual = HashMap::new();
-        manual.insert("step_a".to_string(), {
-            let mut set = HashSet::new();
-            set.insert("step_c".to_string());
-            set
-        });
-
-        let merged = analyzer.merge_dependencies(auto, manual);
-        let step_a_deps = merged.get("step_a").unwrap();
-
-        assert_eq!(step_a_deps.len(), 2);
-        assert!(step_a_deps.contains("step_b"));
-        assert!(step_a_deps.contains("step_c"));
-    }
-
-    #[test]
-    fn test_topological_sort_simple() {
-        let analyzer = DependencyAnalyzer::new();
-
-        let step_a = create_step("a");
-        let mut step_b = create_step("b");
-        step_b.depends_on = Some(vec!["a".to_string()]);
-
-        let flow = Flow {
-            name: "test".to_string(),
-            steps: vec![step_b, step_a], // Intentionally out of order
-            ..Default::default()
-        };
-
-        let sorted = analyzer.topological_sort(&flow).unwrap();
-        assert_eq!(sorted, vec!["a", "b"]);
-    }
-
-    #[test]
-    fn test_topological_sort_with_template_deps() {
-        let analyzer = DependencyAnalyzer::new();
-
-        let step_a = create_step("a");
-
-        let mut step_b = create_step("b");
-        let mut with = HashMap::new();
-        with.insert("text".to_string(), json!("{{ steps.a.output }}"));
-        step_b.with = Some(with);
-
-        let flow = Flow {
-            name: "test".to_string(),
-            steps: vec![step_b, step_a], // b before a in YAML
-            ..Default::default()
-        };
-
-        let sorted = analyzer.topological_sort(&flow).unwrap();
-        assert_eq!(sorted, vec!["a", "b"]); // But a runs first
-    }
-
-    #[test]
-    fn test_detect_circular_dependency() {
-        let analyzer = DependencyAnalyzer::new();
-
-        let mut step_a = create_step("a");
-        step_a.depends_on = Some(vec!["b".to_string()]);
-
-        let mut step_b = create_step("b");
-        step_b.depends_on = Some(vec!["a".to_string()]);
-
-        let flow = Flow {
-            name: "test".to_string(),
-            steps: vec![step_a, step_b],
-            ..Default::default()
-        };
-
-        let result = analyzer.topological_sort(&flow);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Circular dependency")
-        );
-    }
-
-    #[test]
-    fn test_invalid_reference() {
-        let analyzer = DependencyAnalyzer::new();
-
-        let mut step = create_step("a");
-        step.depends_on = Some(vec!["nonexistent".to_string()]);
-
-        let flow = Flow {
-            name: "test".to_string(),
-            steps: vec![step],
-            ..Default::default()
-        };
-
-        let result = analyzer.topological_sort(&flow);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("non-existent step")
-        );
-    }
-
-    #[test]
-    fn test_detect_template_refs_in_with_params() {
-        let analyzer = DependencyAnalyzer::new();
-
-        let step_a = create_step("step_a");
-
-        let mut step_b = create_step("step_b");
-        let mut with = HashMap::new();
-        // This should auto-detect dependency on step_a
-        with.insert(
-            "text".to_string(),
-            json!("Result: {{ steps.step_a.output }}"),
-        );
-        step_b.with = Some(with);
-
-        let flow = Flow {
-            name: "test".to_string(),
-            steps: vec![step_b, step_a], // Intentionally reversed
-            ..Default::default()
-        };
-
-        let graph = analyzer.build_dependency_graph(&flow);
-        println!("Graph: {:?}", graph);
-
-        let deps_b = graph.get("step_b").unwrap();
-        assert!(
-            deps_b.contains("step_a"),
-            "step_b should depend on step_a from template"
-        );
-
-        let sorted = analyzer.topological_sort(&flow).unwrap();
-        println!("Sorted: {:?}", sorted);
-        assert_eq!(
-            sorted,
-            vec!["step_a", "step_b"],
-            "step_a should run before step_b"
-        );
     }
 }

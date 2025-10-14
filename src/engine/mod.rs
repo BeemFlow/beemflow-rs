@@ -5,19 +5,17 @@
 
 pub mod context;
 pub mod executor;
-pub mod runs_access;
 
 use crate::adapter::AdapterRegistry;
 use crate::dsl::Templater;
 use crate::event::EventBus;
 use crate::storage::Storage;
 use crate::{BeemFlowError, Flow, Result};
-pub use runs_access::RunsAccess;
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub use context::StepContext;
+pub use context::{RunsAccess, StepContext};
 pub use executor::Executor;
 
 /// Result of a flow execution
@@ -36,47 +34,20 @@ pub struct PausedRun {
     pub outputs: HashMap<String, serde_json::Value>,
     pub token: String,
     pub run_id: Uuid,
+    pub subscription_id: Uuid, // Event bus subscription ID for cleanup
 }
 
 /// BeemFlow execution engine
+///
+/// The engine should be initialized once via `core::create_dependencies()` and then
+/// shared via Arc<Engine>. For unit tests, use `Engine::for_testing()`.
 pub struct Engine {
     adapters: Arc<AdapterRegistry>,
     mcp_adapter: Arc<crate::adapter::McpAdapter>,
     templater: Arc<Templater>,
     event_bus: Arc<dyn EventBus>,
     storage: Arc<dyn Storage>,
-}
-
-impl Default for Engine {
-    fn default() -> Self {
-        // Create base dependencies
-        let adapters = Arc::new(AdapterRegistry::new());
-        let templater = Arc::new(Templater::new());
-        let event_bus: Arc<dyn EventBus> = Arc::new(crate::event::InProcEventBus::new());
-        let storage: Arc<dyn Storage> = Arc::new(crate::storage::MemoryStorage::new());
-
-        // Register core adapters
-        adapters.register(Arc::new(crate::adapter::CoreAdapter::new()));
-        adapters.register(Arc::new(crate::adapter::HttpAdapter::new(
-            crate::constants::HTTP_ADAPTER_ID.to_string(),
-            None,
-        )));
-
-        // Create and register MCP adapter
-        let mcp_adapter = Arc::new(crate::adapter::McpAdapter::new());
-        adapters.register(mcp_adapter.clone());
-
-        // Load tools and MCP servers from default registry (synchronously from embedded JSON)
-        Self::load_default_registry_tools(&adapters, &mcp_adapter);
-
-        Self {
-            adapters,
-            mcp_adapter,
-            templater,
-            event_bus,
-            storage,
-        }
-    }
+    max_concurrent_tasks: usize,
 }
 
 impl Engine {
@@ -87,6 +58,7 @@ impl Engine {
         templater: Arc<Templater>,
         event_bus: Arc<dyn EventBus>,
         storage: Arc<dyn Storage>,
+        max_concurrent_tasks: usize,
     ) -> Self {
         Self {
             adapters,
@@ -94,6 +66,7 @@ impl Engine {
             templater,
             event_bus,
             storage,
+            max_concurrent_tasks,
         }
     }
 
@@ -213,12 +186,17 @@ impl Engine {
         // Setup execution context (returns error if duplicate run detected)
         let (step_ctx, run_id) = self.setup_execution_context(flow, event.clone()).await?;
 
+        // Fetch previous run data for template access
+        let runs_data = self.fetch_previous_run_data(&flow.name, run_id).await;
+
         // Create executor
         let executor = Executor::new(
             self.adapters.clone(),
             self.templater.clone(),
             self.event_bus.clone(),
             self.storage.clone(),
+            runs_data,
+            self.max_concurrent_tasks,
         );
 
         // Execute steps
@@ -254,11 +232,37 @@ impl Engine {
         // Deserialize paused run from JSON
         let paused: PausedRun = serde_json::from_value(paused_json)?;
 
-        // Update context with resume event
-        let updated_ctx = paused.context.clone();
-        for (k, v) in resume_event {
-            updated_ctx.set_event(k, v);
+        // Clean up event subscription to prevent memory leak
+        tracing::debug!(
+            "Cleaning up subscription {} for resumed token: {}",
+            paused.subscription_id,
+            token
+        );
+        if let Err(e) = self
+            .event_bus
+            .unsubscribe_by_id(paused.subscription_id)
+            .await
+        {
+            tracing::error!("Failed to cleanup subscription on resume: {}", e);
+            // Continue anyway - this is cleanup, not critical
         }
+
+        // Merge resume event with existing event data and create new context
+        let snapshot = paused.context.snapshot();
+        let mut merged_event = snapshot.event;
+        merged_event.extend(resume_event);
+
+        let updated_ctx = StepContext::new(merged_event, snapshot.vars, snapshot.secrets);
+
+        // Restore previous outputs
+        for (k, v) in snapshot.outputs {
+            updated_ctx.set_output(k, v);
+        }
+
+        // Fetch previous run data for template access
+        let runs_data = self
+            .fetch_previous_run_data(&paused.flow.name, paused.run_id)
+            .await;
 
         // Create executor
         let executor = Executor::new(
@@ -266,6 +270,8 @@ impl Engine {
             self.templater.clone(),
             self.event_bus.clone(),
             self.storage.clone(),
+            runs_data,
+            self.max_concurrent_tasks,
         );
 
         // Continue execution
@@ -389,7 +395,8 @@ impl Engine {
 
         // Handle catch blocks if there was an error
         if result.is_err() && flow.catch.is_some() {
-            self.execute_catch_blocks(flow, &event_clone).await?;
+            self.execute_catch_blocks(flow, &event_clone, run_id)
+                .await?;
         }
 
         result
@@ -400,6 +407,7 @@ impl Engine {
         &self,
         flow: &Flow,
         event: &HashMap<String, serde_json::Value>,
+        run_id: Uuid,
     ) -> Result<HashMap<String, serde_json::Value>> {
         let catch_steps = flow
             .catch
@@ -413,25 +421,81 @@ impl Engine {
             secrets,
         );
 
+        // Catch blocks don't have access to previous runs
         let executor = Executor::new(
             self.adapters.clone(),
             self.templater.clone(),
             self.event_bus.clone(),
             self.storage.clone(),
+            None,
+            self.max_concurrent_tasks,
         );
 
-        // Execute catch steps
+        // Execute catch steps and collect step records
         let mut catch_outputs = HashMap::new();
+        let mut step_records = Vec::new();
+
         for step in catch_steps {
-            match executor.execute_step(step, &step_ctx, &step.id).await {
+            let step_start = chrono::Utc::now();
+
+            match executor
+                .execute_single_step(step, &step_ctx, &step.id)
+                .await
+            {
                 Ok(_) => {
-                    if let Some(output) = step_ctx.get_output(&step.id) {
-                        catch_outputs.insert(step.id.clone(), output);
+                    let output = step_ctx.get_output(&step.id);
+                    if let Some(ref output_value) = output {
+                        catch_outputs.insert(step.id.to_string(), output_value.clone());
                     }
+
+                    // Create successful step record
+                    step_records.push(crate::model::StepRun {
+                        id: Uuid::new_v4(),
+                        run_id,
+                        step_name: step.id.clone(),
+                        status: crate::model::StepStatus::Succeeded,
+                        started_at: step_start,
+                        ended_at: Some(chrono::Utc::now()),
+                        error: None,
+                        outputs: output.and_then(|v| {
+                            if let serde_json::Value::Object(map) = v {
+                                Some(map.into_iter().collect())
+                            } else {
+                                None
+                            }
+                        }),
+                    });
                 }
                 Err(e) => {
                     tracing::error!("Catch block step {} failed: {}", step.id, e);
+
+                    // Create failed step record
+                    step_records.push(crate::model::StepRun {
+                        id: Uuid::new_v4(),
+                        run_id,
+                        step_name: step.id.clone(),
+                        status: crate::model::StepStatus::Failed,
+                        started_at: step_start,
+                        ended_at: Some(chrono::Utc::now()),
+                        error: Some(e.to_string()),
+                        outputs: None,
+                    });
                 }
+            }
+        }
+
+        // Save catch block step records to storage
+        if !step_records.is_empty() {
+            // Fetch the current run to update it
+            if let Ok(Some(mut run)) = self.storage.get_run(run_id).await {
+                // Add catch block steps to the run
+                run.steps = Some(step_records);
+                // Save updated run
+                if let Err(e) = self.storage.save_run(&run).await {
+                    tracing::error!("Failed to save catch block outputs to run: {}", e);
+                }
+            } else {
+                tracing::warn!("Could not fetch run {} to save catch block outputs", run_id);
             }
         }
 
@@ -497,6 +561,59 @@ impl Engine {
 
         let hash = hasher.finalize();
         Uuid::new_v5(&Uuid::NAMESPACE_DNS, &hash)
+    }
+
+    /// Fetch previous run data for template access
+    async fn fetch_previous_run_data(
+        &self,
+        flow_name: &str,
+        current_run_id: Uuid,
+    ) -> Option<HashMap<String, serde_json::Value>> {
+        let runs_access = RunsAccess::new(
+            self.storage.clone(),
+            Some(current_run_id),
+            flow_name.to_string(),
+        );
+
+        let prev_data = runs_access.previous().await;
+        (!prev_data.is_empty()).then_some(prev_data)
+    }
+
+    /// Create an engine for testing with MemoryStorage and default components
+    ///
+    /// This method should only be used in tests. For production, use `core::create_dependencies()`
+    /// which initializes the engine with proper configuration.
+    pub fn for_testing() -> Self {
+        let adapters = Arc::new(AdapterRegistry::new());
+
+        // Register core adapters
+        adapters.register(Arc::new(crate::adapter::CoreAdapter::new()));
+        adapters.register(Arc::new(crate::adapter::HttpAdapter::new(
+            crate::constants::HTTP_ADAPTER_ID.to_string(),
+            None,
+        )));
+
+        // Create and register MCP adapter
+        let mcp_adapter = Arc::new(crate::adapter::McpAdapter::new());
+        adapters.register(mcp_adapter.clone());
+
+        // Load tools and MCP servers from default registry
+        Self::load_default_registry_tools(&adapters, &mcp_adapter);
+
+        Self::new(
+            adapters,
+            mcp_adapter,
+            Arc::new(Templater::new()),
+            Arc::new(crate::event::InProcEventBus::new()),
+            Arc::new(crate::storage::MemoryStorage::new()),
+            1000, // Default max concurrent tasks for testing
+        )
+    }
+
+    /// Get storage reference (for testing only)
+    #[cfg(test)]
+    pub fn storage(&self) -> &Arc<dyn Storage> {
+        &self.storage
     }
 }
 

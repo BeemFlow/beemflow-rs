@@ -403,7 +403,17 @@ impl Adapter for CoreAdapter {
         ADAPTER_CORE
     }
 
-    async fn execute(&self, inputs: HashMap<String, Value>) -> Result<HashMap<String, Value>> {
+    async fn execute(
+        &self,
+        inputs: HashMap<String, Value>,
+        _ctx: &super::ExecutionContext,
+    ) -> Result<HashMap<String, Value>> {
+        // CoreAdapter doesn't currently use ExecutionContext, but it's available for
+        // future features like:
+        // - Persisting logs to storage (core.log)
+        // - Loading secrets for template expansion
+        // - User-specific rate limiting
+
         let use_field = inputs
             .get(PARAM_SPECIAL_USE)
             .and_then(|v| v.as_str())

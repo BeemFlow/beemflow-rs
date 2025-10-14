@@ -78,7 +78,7 @@ pub mod runs {
                 .ok_or_else(|| not_found("Flow", &input.flow_name))?;
 
             // Parse and execute flow
-            let flow = parse_string(&content)?;
+            let flow = parse_string(&content, None)?;
             let result = self.deps.engine.execute(&flow, event).await?;
 
             Ok(StartOutput {

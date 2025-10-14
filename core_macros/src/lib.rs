@@ -81,10 +81,7 @@ pub fn operation_group(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Pass through the module with added metadata and auto-registration
     let expanded = quote! {
-        #[allow(dead_code)]
         #vis mod #mod_name {
-            #![allow(unused_imports)]
-
             pub const GROUP_NAME: &str = #group_name;
 
             #(#items)*

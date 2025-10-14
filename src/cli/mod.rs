@@ -527,7 +527,7 @@ async fn run_flow(file: &str, event_json: Option<String>) -> Result<()> {
     tracing::info!("Running flow from: {}", file);
 
     // Parse flow
-    let flow = parse_file(file)?;
+    let flow = parse_file(file, None)?;
 
     // Validate flow
     Validator::validate(&flow)?;
@@ -565,7 +565,7 @@ fn validate_flow(file: &str) -> Result<()> {
     tracing::info!("Validating flow: {}", file);
 
     // Parse flow
-    let flow = parse_file(file)?;
+    let flow = parse_file(file, None)?;
 
     // Validate flow
     Validator::validate(&flow)?;
@@ -580,7 +580,7 @@ fn graph_flow(file: &str, output: Option<String>) -> Result<()> {
     tracing::info!("Generating graph for: {}", file);
 
     // Parse flow
-    let flow = parse_file(file)?;
+    let flow = parse_file(file, None)?;
 
     // Generate diagram
     let diagram = crate::graph::GraphGenerator::generate(&flow)?;
@@ -606,6 +606,7 @@ async fn serve_http(host: &str, port: u16) -> Result<()> {
     config.http = Some(crate::config::HttpConfig {
         host: host.to_string(),
         port,
+        secure: false, // CLI defaults to insecure for local development
     });
 
     // Start server

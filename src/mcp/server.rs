@@ -38,13 +38,15 @@ impl McpServer {
             .clone()
             .serve(rmcp::transport::io::stdio())
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to start MCP server: {}", e))?;
+            .map_err(|e| {
+                crate::BeemFlowError::internal(format!("Failed to start MCP server: {}", e))
+            })?;
 
         // Wait for completion
         service
             .waiting()
             .await
-            .map_err(|e| anyhow::anyhow!("MCP server error: {}", e))?;
+            .map_err(|e| crate::BeemFlowError::internal(format!("MCP server error: {}", e)))?;
 
         tracing::info!("MCP server shutdown");
         Ok(())

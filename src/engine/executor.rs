@@ -11,7 +11,118 @@ use crate::{BeemFlowError, Flow, Result, Step};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
+
+// ============================================================================
+// Helper Functions (used by both main executor and parallel tasks)
+// ============================================================================
+
+/// Resolve adapter for a tool name
+fn resolve_adapter(adapters: &Arc<AdapterRegistry>, tool_name: &str) -> Result<Arc<dyn Adapter>> {
+    // Try exact match first
+    if let Some(adapter) = adapters.get(tool_name) {
+        return Ok(adapter);
+    }
+
+    // Try by prefix
+    if tool_name.starts_with(crate::constants::ADAPTER_PREFIX_MCP) {
+        if let Some(adapter) = adapters.get(crate::constants::ADAPTER_ID_MCP) {
+            return Ok(adapter);
+        }
+        return Err(BeemFlowError::adapter("MCP adapter not registered"));
+    }
+
+    if tool_name.starts_with(crate::constants::ADAPTER_PREFIX_CORE) {
+        if let Some(adapter) = adapters.get(crate::constants::ADAPTER_ID_CORE) {
+            return Ok(adapter);
+        }
+        return Err(BeemFlowError::adapter("Core adapter not registered"));
+    }
+
+    // Fallback to HTTP adapter for registry tools
+    if let Some(adapter) = adapters.get(crate::constants::HTTP_ADAPTER_ID) {
+        return Ok(adapter);
+    }
+
+    Err(BeemFlowError::adapter(format!(
+        "adapter not found: {} (and HTTP adapter not available)",
+        tool_name
+    )))
+}
+
+/// Prepare inputs for tool execution
+fn prepare_inputs(
+    templater: &Arc<Templater>,
+    step: &Step,
+    step_ctx: &StepContext,
+    runs_data: Option<&HashMap<String, Value>>,
+) -> Result<HashMap<String, Value>> {
+    let template_data = if let Some(runs) = runs_data {
+        step_ctx.template_data_with_runs(Some(runs.clone()))
+    } else {
+        step_ctx.template_data()
+    };
+
+    step.with.as_ref().map_or_else(
+        || Ok(HashMap::new()),
+        |with| {
+            with.iter()
+                .map(|(k, v)| {
+                    render_value(templater, v, &template_data).map(|rendered| (k.clone(), rendered))
+                })
+                .collect()
+        },
+    )
+}
+
+/// Render a JSON value recursively, expanding templates
+fn render_value(
+    templater: &Arc<Templater>,
+    val: &Value,
+    data: &HashMap<String, Value>,
+) -> Result<Value> {
+    match val {
+        Value::String(s) => templater.render(s, data).map(Value::String),
+        Value::Array(arr) => arr
+            .iter()
+            .map(|elem| render_value(templater, elem, data))
+            .collect::<Result<Vec<_>>>()
+            .map(Value::Array),
+        Value::Object(obj) => obj
+            .iter()
+            .map(|(k, v)| render_value(templater, v, data).map(|rendered| (k.clone(), rendered)))
+            .collect::<Result<serde_json::Map<String, Value>>>()
+            .map(Value::Object),
+        _ => Ok(val.clone()),
+    }
+}
+
+/// Add special __use parameter for core and MCP tools
+fn add_special_use_param(inputs: &mut HashMap<String, Value>, use_: &str) {
+    if use_.starts_with(crate::constants::ADAPTER_PREFIX_CORE)
+        || use_.starts_with(crate::constants::ADAPTER_PREFIX_MCP)
+    {
+        inputs.insert(
+            crate::constants::PARAM_SPECIAL_USE.to_string(),
+            Value::String(use_.to_string()),
+        );
+    }
+}
+
+/// Create loop variables for foreach iterations
+fn create_loop_vars(
+    base_vars: HashMap<String, Value>,
+    as_var: &str,
+    item: Value,
+    index: usize,
+) -> HashMap<String, Value> {
+    let mut vars = base_vars;
+    vars.insert(as_var.to_string(), item);
+    vars.insert(format!("{}_index", as_var), Value::Number(index.into()));
+    vars.insert(format!("{}_row", as_var), Value::Number((index + 1).into()));
+    vars
+}
 
 /// Step executor
 pub struct Executor {
@@ -19,6 +130,8 @@ pub struct Executor {
     templater: Arc<Templater>,
     event_bus: Arc<dyn EventBus>,
     storage: Arc<dyn Storage>,
+    runs_data: Option<HashMap<String, Value>>,
+    max_concurrent_tasks: usize,
 }
 
 impl Executor {
@@ -28,12 +141,25 @@ impl Executor {
         templater: Arc<Templater>,
         event_bus: Arc<dyn EventBus>,
         storage: Arc<dyn Storage>,
+        runs_data: Option<HashMap<String, Value>>,
+        max_concurrent_tasks: usize,
     ) -> Self {
         Self {
             adapters,
             templater,
             event_bus,
             storage,
+            runs_data,
+            max_concurrent_tasks,
+        }
+    }
+
+    /// Get template data with runs context if available
+    fn get_template_data(&self, step_ctx: &StepContext) -> HashMap<String, Value> {
+        if let Some(ref runs) = self.runs_data {
+            step_ctx.template_data_with_runs(Some(runs.clone()))
+        } else {
+            step_ctx.template_data()
         }
     }
 
@@ -50,26 +176,13 @@ impl Executor {
         start_idx: usize,
         run_id: Uuid,
     ) -> Result<HashMap<String, Value>> {
-        // Pre-fetch previous run data for template access
-        // This enables templates to use {{ runs.previous.outputs.step_name }}
-        let runs_data = self.fetch_previous_run_data(&flow.name, run_id).await;
-        if let Some(ref prev_data) = runs_data {
-            // Store in step context for template rendering
-            // Templates can access via {{ runs.previous.outputs.step1 }}
-            step_ctx.set_var(
-                "runs".to_string(),
-                serde_json::to_value(serde_json::json!({"previous": prev_data}))
-                    .unwrap_or(Value::Null),
-            );
-        }
-
         // Use dependency analyzer to determine execution order
         let analyzer = DependencyAnalyzer::new();
         let sorted_ids = analyzer.topological_sort(flow)?;
 
         // Create lookup map for steps
         let step_map: HashMap<String, &Step> =
-            flow.steps.iter().map(|s| (s.id.clone(), s)).collect();
+            flow.steps.iter().map(|s| (s.id.to_string(), s)).collect();
 
         // Determine which step to start from
         // For fresh runs (start_idx=0), execute all steps in sorted order
@@ -82,7 +195,7 @@ impl Executor {
             let start_step_id = &flow.steps[start_idx].id;
             sorted_ids
                 .iter()
-                .position(|id| id == start_step_id)
+                .position(|id| id.as_str() == start_step_id.as_str())
                 .unwrap_or(0)
         } else {
             return Ok(step_ctx.snapshot().outputs);
@@ -97,7 +210,11 @@ impl Executor {
             // Handle await_event steps
             if step.await_event.is_some() {
                 // Find original index for await_event handling
-                let idx = flow.steps.iter().position(|s| &s.id == step_id).unwrap();
+                let idx = flow
+                    .steps
+                    .iter()
+                    .position(|s| s.id.as_str() == step_id)
+                    .unwrap();
                 return self
                     .handle_await_event(step, flow, step_ctx, idx, run_id)
                     .await;
@@ -111,32 +228,6 @@ impl Executor {
         }
 
         Ok(step_ctx.snapshot().outputs)
-    }
-
-    /// Fetch previous run data for template access
-    async fn fetch_previous_run_data(
-        &self,
-        flow_name: &str,
-        current_run_id: Uuid,
-    ) -> Option<HashMap<String, Value>> {
-        let runs_access = super::RunsAccess::new(
-            self.storage.clone(),
-            Some(current_run_id),
-            flow_name.to_string(),
-        );
-
-        let prev_data = runs_access.previous().await;
-        (!prev_data.is_empty()).then_some(prev_data)
-    }
-
-    /// Execute a step (public interface with boxing to avoid recursion issues)
-    pub fn execute_step<'a>(
-        &'a self,
-        step: &'a Step,
-        step_ctx: &'a StepContext,
-        step_id: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(async move { self.execute_single_step(step, step_ctx, step_id).await })
     }
 
     /// Execute a single step (boxed to handle recursion)
@@ -192,34 +283,38 @@ impl Executor {
             .as_ref()
             .ok_or_else(|| BeemFlowError::validation("parallel block must have steps"))?;
 
+        // Create semaphore to limit concurrent tasks
+        let semaphore = Arc::new(Semaphore::new(self.max_concurrent_tasks));
         let mut handles = Vec::new();
 
         for child_step in steps {
             let child = child_step.clone();
-            let ctx = step_ctx.clone();
+            let step_ctx_clone = step_ctx.clone();
             let adapters = self.adapters.clone();
             let templater = self.templater.clone();
+            let runs_data = self.runs_data.clone();
+            let storage = self.storage.clone();
+            let permit = semaphore.clone().acquire_owned().await.map_err(|e| {
+                BeemFlowError::adapter(format!("Failed to acquire semaphore: {}", e))
+            })?;
 
             let handle = tokio::spawn(async move {
+                let _permit = permit; // Hold permit until task completes
+
                 // Execute tool call directly for parallel steps (no nesting)
                 if let Some(ref use_) = child.use_ {
-                    let adapter = Self::resolve_adapter_static(&adapters, use_)?;
-                    let mut inputs = Self::prepare_inputs_static(&templater, &child, &ctx)?;
+                    let adapter = resolve_adapter(&adapters, use_)?;
+                    let mut inputs =
+                        prepare_inputs(&templater, &child, &step_ctx_clone, runs_data.as_ref())?;
+                    add_special_use_param(&mut inputs, use_);
 
-                    // Add special __use parameter for core and MCP tools
-                    if use_.starts_with(crate::constants::ADAPTER_PREFIX_CORE)
-                        || use_.starts_with(crate::constants::ADAPTER_PREFIX_MCP)
-                    {
-                        inputs.insert(
-                            crate::constants::PARAM_SPECIAL_USE.to_string(),
-                            Value::String(use_.to_string()),
-                        );
-                    }
+                    // Create execution context for OAuth expansion
+                    let exec_ctx = crate::adapter::ExecutionContext::new(storage);
 
-                    let outputs = adapter.execute(inputs).await?;
-                    ctx.set_output(child.id.clone(), serde_json::to_value(outputs)?);
+                    let outputs = adapter.execute(inputs, &exec_ctx).await?;
+                    step_ctx_clone.set_output(child.id.to_string(), serde_json::to_value(outputs)?);
                 }
-                Ok::<_, BeemFlowError>((child.id.clone(), ctx.get_output(&child.id)))
+                Ok::<_, BeemFlowError>((child.id.to_string(), step_ctx_clone.get_output(&child.id)))
             });
 
             handles.push(handle);
@@ -228,9 +323,23 @@ impl Executor {
         // Wait for all tasks to complete
         let mut outputs = HashMap::new();
         for handle in handles {
-            let (child_id, output) = handle
-                .await
-                .map_err(|e| BeemFlowError::adapter(format!("parallel task failed: {}", e)))??;
+            let (child_id, output) = match handle.await {
+                Ok(result) => result?,
+                Err(e) if e.is_panic() => {
+                    tracing::error!("Parallel task panicked: {:?}", e);
+                    return Err(BeemFlowError::adapter("parallel task panicked"));
+                }
+                Err(e) if e.is_cancelled() => {
+                    tracing::warn!("Parallel task was cancelled");
+                    return Err(BeemFlowError::adapter("parallel task cancelled"));
+                }
+                Err(e) => {
+                    return Err(BeemFlowError::adapter(format!(
+                        "parallel task failed: {}",
+                        e
+                    )));
+                }
+            };
             if let Some(output_val) = output {
                 outputs.insert(child_id, output_val);
             }
@@ -256,7 +365,7 @@ impl Executor {
         };
 
         // Evaluate foreach expression
-        let template_data = step_ctx.template_data();
+        let template_data = self.get_template_data(step_ctx);
         let list_val = self
             .templater
             .evaluate_expression(foreach_expr, &template_data)?;
@@ -296,23 +405,38 @@ impl Executor {
         step_ctx: &StepContext,
     ) -> Result<()> {
         for (index, item) in list.iter().enumerate() {
-            // Set loop variables
-            step_ctx.set_var(as_var.to_string(), item.clone());
-            step_ctx.set_var(format!("{}_index", as_var), Value::Number(index.into()));
-            step_ctx.set_var(format!("{}_row", as_var), Value::Number((index + 1).into()));
+            // Create child context with loop variables
+            let snapshot = step_ctx.snapshot();
+            let iter_vars = create_loop_vars(snapshot.vars.clone(), as_var, item.clone(), index);
+            let iter_ctx = StepContext::new(snapshot.event, iter_vars, snapshot.secrets);
+
+            // Copy outputs to child context
+            snapshot
+                .outputs
+                .into_iter()
+                .for_each(|(k, v)| iter_ctx.set_output(k, v));
 
             // Execute all steps for this iteration
             for inner_step in do_steps {
                 // Render step ID
-                let template_data = step_ctx.template_data();
-                let rendered_id = self
-                    .render_value(&Value::String(inner_step.id.clone()), &template_data)?
-                    .as_str()
-                    .unwrap_or(&inner_step.id)
-                    .to_string();
+                let template_data = self.get_template_data(&iter_ctx);
+                let rendered_id = render_value(
+                    &self.templater,
+                    &Value::String(inner_step.id.to_string()),
+                    &template_data,
+                )?
+                .as_str()
+                .unwrap_or(inner_step.id.as_str())
+                .to_string();
 
-                self.execute_single_step(inner_step, step_ctx, &rendered_id)
+                self.execute_single_step(inner_step, &iter_ctx, &rendered_id)
                     .await?;
+            }
+
+            // Copy outputs back to parent context
+            let iter_snapshot = iter_ctx.snapshot();
+            for (k, v) in iter_snapshot.outputs {
+                step_ctx.set_output(k, v);
             }
         }
 
@@ -327,6 +451,8 @@ impl Executor {
         do_steps: &[Step],
         step_ctx: &StepContext,
     ) -> Result<()> {
+        // Create semaphore to limit concurrent tasks
+        let semaphore = Arc::new(Semaphore::new(self.max_concurrent_tasks));
         let mut handles = Vec::new();
 
         for (index, item) in list.iter().enumerate() {
@@ -336,10 +462,18 @@ impl Executor {
             let snapshot = step_ctx.snapshot();
             let adapters = self.adapters.clone();
             let templater = self.templater.clone();
+            let runs_data = self.runs_data.clone();
+            let storage = self.storage.clone();
+            let permit = semaphore.clone().acquire_owned().await.map_err(|e| {
+                BeemFlowError::adapter(format!("Failed to acquire semaphore: {}", e))
+            })?;
 
             let handle = tokio::spawn(async move {
-                // Create iteration context
-                let iter_ctx = StepContext::new(snapshot.event, snapshot.vars, snapshot.secrets);
+                let _permit = permit; // Hold permit until task completes
+
+                // Create iteration context with loop variables
+                let iter_vars = create_loop_vars(snapshot.vars.clone(), &as_var, item, index);
+                let iter_ctx = StepContext::new(snapshot.event, iter_vars, snapshot.secrets);
 
                 // Copy existing outputs using iterator
                 snapshot
@@ -347,30 +481,20 @@ impl Executor {
                     .into_iter()
                     .for_each(|(k, v)| iter_ctx.set_output(k, v));
 
-                // Set loop variables
-                iter_ctx.set_var(as_var.clone(), item);
-                iter_ctx.set_var(format!("{}_index", as_var), Value::Number(index.into()));
-                iter_ctx.set_var(format!("{}_row", as_var), Value::Number((index + 1).into()));
+                // Create execution context for OAuth expansion
+                let exec_ctx = crate::adapter::ExecutionContext::new(storage);
 
                 // Execute steps - simple tool calls only in parallel foreach
                 for inner_step in &do_steps {
                     if let Some(ref use_) = inner_step.use_ {
-                        let adapter = Self::resolve_adapter_static(&adapters, use_)?;
+                        let adapter = resolve_adapter(&adapters, use_)?;
                         let mut inputs =
-                            Self::prepare_inputs_static(&templater, inner_step, &iter_ctx)?;
+                            prepare_inputs(&templater, inner_step, &iter_ctx, runs_data.as_ref())?;
+                        add_special_use_param(&mut inputs, use_);
 
-                        // Add special __use parameter for core and MCP tools
-                        if use_.starts_with(crate::constants::ADAPTER_PREFIX_CORE)
-                            || use_.starts_with(crate::constants::ADAPTER_PREFIX_MCP)
-                        {
-                            inputs.insert(
-                                crate::constants::PARAM_SPECIAL_USE.to_string(),
-                                Value::String(use_.to_string()),
-                            );
-                        }
-
-                        let outputs = adapter.execute(inputs).await?;
-                        iter_ctx.set_output(inner_step.id.clone(), serde_json::to_value(outputs)?);
+                        let outputs = adapter.execute(inputs, &exec_ctx).await?;
+                        iter_ctx
+                            .set_output(inner_step.id.to_string(), serde_json::to_value(outputs)?);
                     }
                 }
 
@@ -382,9 +506,23 @@ impl Executor {
 
         // Wait for all iterations
         for handle in handles {
-            let snapshot = handle.await.map_err(|e| {
-                BeemFlowError::adapter(format!("foreach parallel task failed: {}", e))
-            })??;
+            let snapshot = match handle.await {
+                Ok(result) => result?,
+                Err(e) if e.is_panic() => {
+                    tracing::error!("Foreach parallel task panicked: {:?}", e);
+                    return Err(BeemFlowError::adapter("foreach parallel task panicked"));
+                }
+                Err(e) if e.is_cancelled() => {
+                    tracing::warn!("Foreach parallel task was cancelled");
+                    return Err(BeemFlowError::adapter("foreach parallel task cancelled"));
+                }
+                Err(e) => {
+                    return Err(BeemFlowError::adapter(format!(
+                        "foreach parallel task failed: {}",
+                        e
+                    )));
+                }
+            };
 
             // Merge outputs back to main context using iterator
             snapshot
@@ -404,32 +542,22 @@ impl Executor {
         step_ctx: &StepContext,
         step_id: &str,
     ) -> Result<()> {
-        // Resolve adapter
-        let adapter = self.resolve_adapter(use_)?;
+        let adapter = resolve_adapter(&self.adapters, use_)?;
+        let mut inputs = prepare_inputs(&self.templater, step, step_ctx, self.runs_data.as_ref())?;
+        add_special_use_param(&mut inputs, use_);
 
-        // Prepare inputs
-        let mut inputs = self.prepare_inputs(step, step_ctx).await?;
-
-        // Add special __use parameter for core and MCP tools
-        if use_.starts_with(crate::constants::ADAPTER_PREFIX_CORE)
-            || use_.starts_with(crate::constants::ADAPTER_PREFIX_MCP)
-        {
-            inputs.insert(
-                crate::constants::PARAM_SPECIAL_USE.to_string(),
-                Value::String(use_.to_string()),
-            );
-        }
+        // Create execution context with storage for OAuth expansion, etc.
+        let ctx = crate::adapter::ExecutionContext::new(self.storage.clone());
 
         // Execute with retry if configured
         let outputs = if let Some(ref retry) = step.retry {
-            self.execute_with_retry(&adapter, inputs, retry).await?
+            self.execute_with_retry(&adapter, inputs, &ctx, retry)
+                .await?
         } else {
-            adapter.execute(inputs).await?
+            adapter.execute(inputs, &ctx).await?
         };
 
-        // Store outputs
         step_ctx.set_output(step_id.to_string(), serde_json::to_value(outputs)?);
-
         Ok(())
     }
 
@@ -438,13 +566,14 @@ impl Executor {
         &self,
         adapter: &Arc<dyn Adapter>,
         inputs: HashMap<String, Value>,
+        ctx: &crate::adapter::ExecutionContext,
         retry: &crate::model::RetrySpec,
     ) -> Result<HashMap<String, Value>> {
         let mut attempts = 0;
         let mut last_error = None;
 
         while attempts < retry.attempts {
-            match adapter.execute(inputs.clone()).await {
+            match adapter.execute(inputs.clone(), ctx).await {
                 Ok(outputs) => {
                     if attempts > 0 {
                         tracing::info!(
@@ -519,8 +648,8 @@ impl Executor {
             .get(crate::constants::MATCH_KEY_TOKEN)
             .ok_or_else(|| BeemFlowError::validation("await_event missing token in match"))?;
 
-        let template_data = step_ctx.template_data();
-        let rendered_token = self.render_value(token_val, &template_data)?;
+        let template_data = self.get_template_data(step_ctx);
+        let rendered_token = render_value(&self.templater, token_val, &template_data)?;
         let token = rendered_token
             .as_str()
             .ok_or_else(|| BeemFlowError::validation("token must be a string"))?;
@@ -532,26 +661,13 @@ impl Executor {
             ));
         }
 
-        // Create paused run
-        let paused = PausedRun {
-            flow: flow.clone(),
-            step_idx,
-            context: step_ctx.clone(),
-            outputs: step_ctx.snapshot().outputs,
-            token: token.to_string(),
-            run_id,
-        };
-
-        // Store paused run in storage (no in-memory cache)
-        let paused_value = serde_json::to_value(&paused)?;
-        self.storage.save_paused_run(token, paused_value).await?;
-
-        // Set up event subscription with proper event matching
+        // Set up event subscription with proper event matching (returns subscription ID)
         let token_owned = token.to_string();
         let match_criteria = await_spec.match_.clone();
         let event_bus_ref = self.event_bus.clone();
 
-        self.event_bus
+        let subscription_id = self
+            .event_bus
             .subscribe(
                 &await_spec.source,
                 Arc::new(move |payload| {
@@ -576,29 +692,49 @@ impl Executor {
             )
             .await?;
 
-        // Note: The resume subscription is not set up here anymore
-        // Instead, the Engine will call resume() manually via operations or the resume method
-        // The flow now:
-        // 1. Publish event to source topic (e.g., "test")
-        // 2. This subscription matches and publishes to "resume.{token}"
-        // 3. External code (tests, operations, etc.) must call engine.resume(token, event)
-        //    OR subscribe to resume.* topics and call engine.resume()
-
-        // For tests and manual resume, call engine.resume(token, event) directly
+        tracing::debug!(
+            "Created subscription {} for await_event token: {} on topic: {}",
+            subscription_id,
+            token,
+            await_spec.source
+        );
 
         // Handle timeout if specified
         if let Some(ref timeout) = await_spec.timeout {
             let timeout_duration = self.parse_timeout(timeout)?;
             let timeout_token = token.to_string();
+            let timeout_sub_id = subscription_id;
+            let event_bus_timeout = self.event_bus.clone();
 
             tokio::spawn(async move {
                 tokio::time::sleep(timeout_duration).await;
-                tracing::warn!("Timeout reached for await_event token: {}", timeout_token);
+                tracing::warn!(
+                    "Timeout reached for await_event token: {}, cleaning up subscription {}",
+                    timeout_token,
+                    timeout_sub_id
+                );
 
-                // Timeout reached - could extend to trigger timeout event or mark run as failed
-                // For now, just log the timeout as the subscription remains active
+                // Clean up subscription on timeout
+                if let Err(e) = event_bus_timeout.unsubscribe_by_id(timeout_sub_id).await {
+                    tracing::error!("Failed to cleanup subscription on timeout: {}", e);
+                }
             });
         }
+
+        // Create paused run with subscription ID for cleanup on resume
+        let paused = PausedRun {
+            flow: flow.clone(),
+            step_idx,
+            context: step_ctx.clone(),
+            outputs: step_ctx.snapshot().outputs,
+            token: token.to_string(),
+            run_id,
+            subscription_id, // Store for cleanup when resumed
+        };
+
+        // Store paused run in storage (no in-memory cache)
+        let paused_value = serde_json::to_value(&paused)?;
+        self.storage.save_paused_run(token, paused_value).await?;
 
         Err(BeemFlowError::AwaitEventPause(format!(
             "step '{}' is waiting for event",
@@ -635,10 +771,16 @@ impl Executor {
             )));
         };
 
-        value_str
-            .parse::<u64>()
-            .map(|v| std::time::Duration::from_secs(v * multiplier))
-            .map_err(|_| BeemFlowError::validation(format!("Invalid timeout format: {}", timeout)))
+        let value = value_str.parse::<u64>().map_err(|_| {
+            BeemFlowError::validation(format!("Invalid timeout format: {}", timeout))
+        })?;
+
+        // Calculate total seconds with overflow check
+        let total_secs = value
+            .checked_mul(multiplier)
+            .ok_or_else(|| BeemFlowError::validation("Timeout value too large (overflow)"))?;
+
+        Ok(std::time::Duration::from_secs(total_secs))
     }
 
     /// Evaluate a conditional expression
@@ -657,7 +799,7 @@ impl Executor {
         }
 
         // Use templater's evaluate_expression to get the actual value
-        let template_data = step_ctx.template_data();
+        let template_data = self.get_template_data(step_ctx);
         let value = self
             .templater
             .evaluate_expression(condition, &template_data)?;
@@ -691,108 +833,6 @@ impl Executor {
 
         // Null is falsy
         Ok(!value.is_null())
-    }
-
-    /// Resolve adapter for a tool
-    fn resolve_adapter(&self, tool_name: &str) -> Result<Arc<dyn Adapter>> {
-        Self::resolve_adapter_static(&self.adapters, tool_name)
-    }
-
-    /// Static helper to resolve adapter
-    fn resolve_adapter_static(
-        adapters: &Arc<AdapterRegistry>,
-        tool_name: &str,
-    ) -> Result<Arc<dyn Adapter>> {
-        // Try exact match first
-        if let Some(adapter) = adapters.get(tool_name) {
-            return Ok(adapter);
-        }
-
-        // Try by prefix
-        if tool_name.starts_with(crate::constants::ADAPTER_PREFIX_MCP) {
-            if let Some(adapter) = adapters.get(crate::constants::ADAPTER_ID_MCP) {
-                return Ok(adapter);
-            }
-            return Err(BeemFlowError::adapter("MCP adapter not registered"));
-        }
-
-        if tool_name.starts_with(crate::constants::ADAPTER_PREFIX_CORE) {
-            if let Some(adapter) = adapters.get(crate::constants::ADAPTER_ID_CORE) {
-                return Ok(adapter);
-            }
-            return Err(BeemFlowError::adapter("Core adapter not registered"));
-        }
-
-        // Fallback to HTTP adapter for registry tools (e.g., http.fetch, openai.chat_completion)
-        // This matches Go implementation where registry tools default to HTTP adapter
-        if let Some(adapter) = adapters.get(crate::constants::HTTP_ADAPTER_ID) {
-            return Ok(adapter);
-        }
-
-        Err(BeemFlowError::adapter(format!(
-            "adapter not found: {} (and HTTP adapter not available)",
-            tool_name
-        )))
-    }
-
-    /// Prepare inputs for tool execution
-    async fn prepare_inputs(
-        &self,
-        step: &Step,
-        step_ctx: &StepContext,
-    ) -> Result<HashMap<String, Value>> {
-        Self::prepare_inputs_static(&self.templater, step, step_ctx)
-    }
-
-    /// Static helper to prepare inputs
-    fn prepare_inputs_static(
-        templater: &Arc<Templater>,
-        step: &Step,
-        step_ctx: &StepContext,
-    ) -> Result<HashMap<String, Value>> {
-        let template_data = step_ctx.template_data();
-
-        step.with.as_ref().map_or_else(
-            || Ok(HashMap::new()),
-            |with| {
-                with.iter()
-                    .map(|(k, v)| {
-                        Self::render_value_static(templater, v, &template_data)
-                            .map(|rendered| (k.clone(), rendered))
-                    })
-                    .collect()
-            },
-        )
-    }
-
-    /// Render a value recursively
-    fn render_value(&self, val: &Value, data: &HashMap<String, Value>) -> Result<Value> {
-        Self::render_value_static(&self.templater, val, data)
-    }
-
-    /// Static helper to render value
-    fn render_value_static(
-        templater: &Arc<Templater>,
-        val: &Value,
-        data: &HashMap<String, Value>,
-    ) -> Result<Value> {
-        match val {
-            Value::String(s) => templater.render(s, data).map(Value::String),
-            Value::Array(arr) => arr
-                .iter()
-                .map(|elem| Self::render_value_static(templater, elem, data))
-                .collect::<Result<Vec<_>>>()
-                .map(Value::Array),
-            Value::Object(obj) => obj
-                .iter()
-                .map(|(k, v)| {
-                    Self::render_value_static(templater, v, data)
-                        .map(|rendered| (k.clone(), rendered))
-                })
-                .collect::<Result<serde_json::Map<String, Value>>>()
-                .map(Value::Object),
-            _ => Ok(val.clone()),
-        }
     }
 
     /// Persist step result to storage

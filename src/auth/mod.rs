@@ -54,3 +54,6 @@ impl Default for OAuthServer {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod middleware_test;

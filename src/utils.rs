@@ -4,56 +4,6 @@
 
 use once_cell::sync::Lazy;
 use regex::Regex;
-use tracing::{debug, error, info, warn};
-
-/// Log a debug message
-#[inline]
-#[allow(dead_code)]
-pub fn log_debug(msg: &str) {
-    debug!("{}", msg);
-}
-
-/// Log an info message
-#[inline]
-#[allow(dead_code)]
-pub fn log_info(msg: &str) {
-    info!("{}", msg);
-}
-
-/// Log a warning
-#[inline]
-#[allow(dead_code)]
-pub fn log_warn(msg: &str) {
-    warn!("{}", msg);
-}
-
-/// Log an error
-#[inline]
-#[allow(dead_code)]
-pub fn log_error(msg: &str) {
-    error!("{}", msg);
-}
-
-/// Safe string reference for JSON values (zero-copy)
-#[inline]
-#[allow(dead_code)]
-pub fn safe_str(val: &serde_json::Value) -> Option<&str> {
-    val.as_str()
-}
-
-/// Safe string conversion for JSON values (allocates)
-#[inline]
-#[allow(dead_code)]
-pub fn safe_string(val: &serde_json::Value) -> Option<String> {
-    val.as_str().map(|s| s.to_string())
-}
-
-/// Safe map conversion for JSON values
-#[inline]
-#[allow(dead_code)]
-pub fn safe_map(val: &serde_json::Value) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    val.as_object()
-}
 
 /// Expand environment variable references in config values
 ///

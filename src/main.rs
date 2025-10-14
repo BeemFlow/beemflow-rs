@@ -5,7 +5,6 @@
 
 #[tokio::main]
 async fn main() {
-    // Load .env file as early as possible (like Go version)
     // This loads environment variables for API keys, secrets, etc.
     let _ = dotenvy::dotenv();
 

@@ -3,7 +3,9 @@
 //! Provides persistent storage for flows, runs, steps, and OAuth data using SQLite.
 
 use crate::model::*;
-use crate::storage::{FlowSnapshot, Storage, sql_common::*};
+use crate::storage::{
+    FlowSnapshot, FlowStorage, OAuthStorage, RunStorage, StateStorage, sql_common::*,
+};
 use crate::{BeemFlowError, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -36,6 +38,13 @@ impl SqliteStorage {
 
         // Extract actual file path for directory creation
         let file_path = dsn.strip_prefix("sqlite:").unwrap_or(dsn);
+
+        // Validate path to prevent directory traversal attacks
+        if file_path.contains("..") {
+            return Err(BeemFlowError::config(
+                "Database path cannot contain '..' (path traversal not allowed)",
+            ));
+        }
 
         // Create parent directory if needed (unless it's :memory:)
         if file_path != ":memory:"
@@ -75,7 +84,7 @@ impl SqliteStorage {
     fn parse_run(row: &SqliteRow) -> Result<Run> {
         Ok(Run {
             id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
-            flow_name: row.try_get("flow_name")?,
+            flow_name: row.try_get::<String, _>("flow_name")?.into(),
             event: parse_hashmap_from_text(&row.try_get::<String, _>("event")?)?,
             vars: parse_hashmap_from_text(&row.try_get::<String, _>("vars")?)?,
             status: parse_run_status(&row.try_get::<String, _>("status")?),
@@ -91,7 +100,7 @@ impl SqliteStorage {
         Ok(StepRun {
             id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
             run_id: Uuid::parse_str(&row.try_get::<String, _>("run_id")?)?,
-            step_name: row.try_get("step_name")?,
+            step_name: row.try_get::<String, _>("step_name")?.into(),
             status: parse_step_status(&row.try_get::<String, _>("status")?),
             started_at: datetime_from_unix(row.try_get("started_at")?),
             ended_at: row
@@ -104,7 +113,7 @@ impl SqliteStorage {
 }
 
 #[async_trait]
-impl Storage for SqliteStorage {
+impl RunStorage for SqliteStorage {
     // Run methods
     async fn save_run(&self, run: &Run) -> Result<()> {
         sqlx::query(
@@ -119,7 +128,7 @@ impl Storage for SqliteStorage {
                 ended_at = excluded.ended_at",
         )
         .bind(run.id.to_string())
-        .bind(&run.flow_name)
+        .bind(run.flow_name.as_str())
         .bind(serde_json::to_string(&run.event)?)
         .bind(serde_json::to_string(&run.vars)?)
         .bind(run_status_to_str(run.status))
@@ -184,7 +193,7 @@ impl Storage for SqliteStorage {
              ON CONFLICT(id) DO NOTHING",
         )
         .bind(run.id.to_string())
-        .bind(&run.flow_name)
+        .bind(run.flow_name.as_str())
         .bind(serde_json::to_string(&run.event)?)
         .bind(serde_json::to_string(&run.vars)?)
         .bind(run_status_to_str(run.status))
@@ -213,7 +222,7 @@ impl Storage for SqliteStorage {
         )
         .bind(step.id.to_string())
         .bind(step.run_id.to_string())
-        .bind(&step.step_name)
+        .bind(step.step_name.as_str())
         .bind(step_status_to_str(step.status))
         .bind(datetime_to_unix(step.started_at))
         .bind(step.ended_at.map(datetime_to_unix))
@@ -242,7 +251,10 @@ impl Storage for SqliteStorage {
         }
         Ok(steps)
     }
+}
 
+#[async_trait]
+impl StateStorage for SqliteStorage {
     // Wait/timeout methods
     async fn register_wait(&self, token: Uuid, wake_at: Option<i64>) -> Result<()> {
         sqlx::query(
@@ -324,7 +336,10 @@ impl Storage for SqliteStorage {
             None => Ok(None),
         }
     }
+}
 
+#[async_trait]
+impl FlowStorage for SqliteStorage {
     // Flow management methods
     async fn save_flow(&self, name: &str, content: &str, _version: Option<&str>) -> Result<()> {
         let now = Utc::now().timestamp();
@@ -490,7 +505,10 @@ impl Storage for SqliteStorage {
 
         Ok(snapshots)
     }
+}
 
+#[async_trait]
+impl OAuthStorage for SqliteStorage {
     // OAuth credential methods
     async fn save_oauth_credential(&self, credential: &OAuthCredential) -> Result<()> {
         let now = Utc::now().timestamp();
@@ -615,10 +633,7 @@ impl Storage for SqliteStorage {
         .await?;
 
         if result.rows_affected() == 0 {
-            return Err(BeemFlowError::not_found(format!(
-                "OAuth credential not found: {}",
-                id
-            )));
+            return Err(BeemFlowError::not_found("OAuth credential", id));
         }
 
         Ok(())
@@ -666,7 +681,7 @@ impl Storage for SqliteStorage {
 
                 Ok(Some(OAuthProvider {
                     id: row.try_get::<String, _>("id")?,
-                    name: row.try_get::<String, _>("id")?, // Use ID as name for backwards compat
+                    name: row.try_get::<String, _>("id")?, // DB schema has no name column, duplicate id
                     client_id: row.try_get("client_id")?,
                     client_secret: row.try_get("client_secret")?,
                     auth_url: row.try_get("auth_url")?,
@@ -699,7 +714,7 @@ impl Storage for SqliteStorage {
 
             providers.push(OAuthProvider {
                 id: row.try_get::<String, _>("id")?,
-                name: row.try_get::<String, _>("id")?, // Use ID as name for backwards compat
+                name: row.try_get::<String, _>("id")?, // DB schema has no name column, duplicate id
                 client_id: row.try_get("client_id")?,
                 client_secret: row.try_get("client_secret")?,
                 auth_url: row.try_get("auth_url")?,
@@ -720,10 +735,7 @@ impl Storage for SqliteStorage {
             .await?;
 
         if result.rows_affected() == 0 {
-            return Err(BeemFlowError::not_found(format!(
-                "OAuth provider not found: {}",
-                id
-            )));
+            return Err(BeemFlowError::not_found("OAuth provider", id));
         }
 
         Ok(())
@@ -844,10 +856,7 @@ impl Storage for SqliteStorage {
             .await?;
 
         if result.rows_affected() == 0 {
-            return Err(BeemFlowError::not_found(format!(
-                "OAuth client not found: {}",
-                id
-            )));
+            return Err(BeemFlowError::not_found("OAuth client", id));
         }
 
         Ok(())
@@ -889,15 +898,18 @@ impl Storage for SqliteStorage {
     }
 
     async fn get_oauth_token_by_code(&self, code: &str) -> Result<Option<OAuthToken>> {
-        self.get_oauth_token_by_field("code", code).await
+        self.get_oauth_token_by_field(OAuthTokenField::Code, code)
+            .await
     }
 
     async fn get_oauth_token_by_access(&self, access: &str) -> Result<Option<OAuthToken>> {
-        self.get_oauth_token_by_field("access", access).await
+        self.get_oauth_token_by_field(OAuthTokenField::Access, access)
+            .await
     }
 
     async fn get_oauth_token_by_refresh(&self, refresh: &str) -> Result<Option<OAuthToken>> {
-        self.get_oauth_token_by_field("refresh", refresh).await
+        self.get_oauth_token_by_field(OAuthTokenField::Refresh, refresh)
+            .await
     }
 
     async fn delete_oauth_token_by_code(&self, code: &str) -> Result<()> {
@@ -925,21 +937,42 @@ impl Storage for SqliteStorage {
     }
 }
 
+/// OAuth token field selector (prevents SQL injection)
+enum OAuthTokenField {
+    Code,
+    Access,
+    Refresh,
+}
+
 impl SqliteStorage {
     async fn get_oauth_token_by_field(
         &self,
-        field: &str,
+        field: OAuthTokenField,
         value: &str,
     ) -> Result<Option<OAuthToken>> {
-        let query = format!(
-            "SELECT id, client_id, user_id, redirect_uri, scope, code, code_create_at, code_expires_in,
-                    code_challenge, code_challenge_method, access, access_create_at, access_expires_in,
-                    refresh, refresh_create_at, refresh_expires_in
-             FROM oauth_tokens WHERE {} = ?",
-            field
-        );
+        // Use explicit match to prevent SQL injection
+        let query = match field {
+            OAuthTokenField::Code => {
+                "SELECT id, client_id, user_id, redirect_uri, scope, code, code_create_at, code_expires_in,
+                        code_challenge, code_challenge_method, access, access_create_at, access_expires_in,
+                        refresh, refresh_create_at, refresh_expires_in
+                 FROM oauth_tokens WHERE code = ?"
+            }
+            OAuthTokenField::Access => {
+                "SELECT id, client_id, user_id, redirect_uri, scope, code, code_create_at, code_expires_in,
+                        code_challenge, code_challenge_method, access, access_create_at, access_expires_in,
+                        refresh, refresh_create_at, refresh_expires_in
+                 FROM oauth_tokens WHERE access = ?"
+            }
+            OAuthTokenField::Refresh => {
+                "SELECT id, client_id, user_id, redirect_uri, scope, code, code_create_at, code_expires_in,
+                        code_challenge, code_challenge_method, access, access_create_at, access_expires_in,
+                        refresh, refresh_create_at, refresh_expires_in
+                 FROM oauth_tokens WHERE refresh = ?"
+            }
+        };
 
-        let row = sqlx::query(&query)
+        let row = sqlx::query(query)
             .bind(value)
             .fetch_optional(&self.pool)
             .await?;
@@ -962,20 +995,35 @@ impl SqliteStorage {
                     code: row.try_get("code")?,
                     code_create_at: code_create_at_unix
                         .and_then(|ts| DateTime::from_timestamp(ts, 0)),
-                    code_expires_in: code_expires_in_secs
-                        .map(|s| std::time::Duration::from_secs(s as u64)),
+                    code_expires_in: code_expires_in_secs.and_then(|s| {
+                        if s >= 0 {
+                            Some(std::time::Duration::from_secs(s as u64))
+                        } else {
+                            None
+                        }
+                    }),
                     code_challenge: row.try_get("code_challenge").ok(),
                     code_challenge_method: row.try_get("code_challenge_method").ok(),
                     access: row.try_get("access")?,
                     access_create_at: access_create_at_unix
                         .and_then(|ts| DateTime::from_timestamp(ts, 0)),
-                    access_expires_in: access_expires_in_secs
-                        .map(|s| std::time::Duration::from_secs(s as u64)),
+                    access_expires_in: access_expires_in_secs.and_then(|s| {
+                        if s >= 0 {
+                            Some(std::time::Duration::from_secs(s as u64))
+                        } else {
+                            None
+                        }
+                    }),
                     refresh: row.try_get("refresh")?,
                     refresh_create_at: refresh_create_at_unix
                         .and_then(|ts| DateTime::from_timestamp(ts, 0)),
-                    refresh_expires_in: refresh_expires_in_secs
-                        .map(|s| std::time::Duration::from_secs(s as u64)),
+                    refresh_expires_in: refresh_expires_in_secs.and_then(|s| {
+                        if s >= 0 {
+                            Some(std::time::Duration::from_secs(s as u64))
+                        } else {
+                            None
+                        }
+                    }),
                 }))
             }
             None => Ok(None),

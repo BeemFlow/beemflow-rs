@@ -16,7 +16,7 @@ fn setup_executor() -> Executor {
     let event_bus: Arc<dyn EventBus> = Arc::new(crate::event::InProcEventBus::new());
     let storage: Arc<dyn Storage> = Arc::new(crate::storage::MemoryStorage::new());
 
-    Executor::new(adapters, templater, event_bus, storage)
+    Executor::new(adapters, templater, event_bus, storage, None, 1000)
 }
 
 #[tokio::test]
@@ -42,11 +42,11 @@ async fn test_parallel_block_execution() {
     let step_ctx = StepContext::new(HashMap::new(), HashMap::new(), HashMap::new());
 
     let step = Step {
-        id: "parallel_test".to_string(),
+        id: "parallel_test".to_string().into(),
         parallel: Some(true),
         steps: Some(vec![
             Step {
-                id: "task1".to_string(),
+                id: "task1".to_string().into(),
                 use_: Some("core.echo".to_string()),
                 with: Some({
                     let mut map = HashMap::new();
@@ -56,7 +56,7 @@ async fn test_parallel_block_execution() {
                 ..Default::default()
             },
             Step {
-                id: "task2".to_string(),
+                id: "task2".to_string().into(),
                 use_: Some("core.echo".to_string()),
                 with: Some({
                     let mut map = HashMap::new();
@@ -85,11 +85,11 @@ async fn test_parallel_block_with_error() {
     let step_ctx = StepContext::new(HashMap::new(), HashMap::new(), HashMap::new());
 
     let step = Step {
-        id: "parallel_error".to_string(),
+        id: "parallel_error".to_string().into(),
         parallel: Some(true),
         steps: Some(vec![
             Step {
-                id: "good_task".to_string(),
+                id: "good_task".to_string().into(),
                 use_: Some("core.echo".to_string()),
                 with: Some({
                     let mut map = HashMap::new();
@@ -99,7 +99,7 @@ async fn test_parallel_block_with_error() {
                 ..Default::default()
             },
             Step {
-                id: "bad_task".to_string(),
+                id: "bad_task".to_string().into(),
                 use_: Some("nonexistent.adapter".to_string()),
                 with: Some(HashMap::new()),
                 ..Default::default()
@@ -130,11 +130,11 @@ async fn test_foreach_sequential() {
     let step_ctx = StepContext::new(HashMap::new(), vars, HashMap::new());
 
     let step = Step {
-        id: "foreach_seq".to_string(),
+        id: "foreach_seq".to_string().into(),
         foreach: Some("{{ vars.items }}".to_string()),
         as_: Some("item".to_string()),
         do_: Some(vec![Step {
-            id: "process".to_string(),
+            id: "process".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some({
                 let mut map = HashMap::new();
@@ -173,12 +173,12 @@ async fn test_foreach_parallel() {
     let step_ctx = StepContext::new(HashMap::new(), vars, HashMap::new());
 
     let step = Step {
-        id: "foreach_par".to_string(),
+        id: "foreach_par".to_string().into(),
         foreach: Some("{{ vars.items }}".to_string()),
         as_: Some("item".to_string()),
         parallel: Some(true),
         do_: Some(vec![Step {
-            id: "process_{{ item_index }}".to_string(),
+            id: "process_{{ item_index }}".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some({
                 let mut map = HashMap::new();
@@ -208,11 +208,11 @@ async fn test_foreach_empty_list() {
     let step_ctx = StepContext::new(HashMap::new(), vars, HashMap::new());
 
     let step = Step {
-        id: "foreach_empty".to_string(),
+        id: "foreach_empty".to_string().into(),
         foreach: Some("{{ vars.items }}".to_string()),
         as_: Some("item".to_string()),
         do_: Some(vec![Step {
-            id: "process".to_string(),
+            id: "process".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some(HashMap::new()),
             ..Default::default()
@@ -236,7 +236,7 @@ async fn test_retry_logic() {
 
     // Create a step that will fail and should not retry successfully
     let step = Step {
-        id: "retry_test".to_string(),
+        id: "retry_test".to_string().into(),
         use_: Some("nonexistent.adapter".to_string()),
         with: Some(HashMap::new()),
         retry: Some(crate::model::RetrySpec {
@@ -262,7 +262,7 @@ async fn test_conditional_skip() {
     let step_ctx = StepContext::new(HashMap::new(), vars, HashMap::new());
 
     let step = Step {
-        id: "conditional_step".to_string(),
+        id: "conditional_step".to_string().into(),
         use_: Some("core.echo".to_string()),
         if_: Some("{{ enabled }}".to_string()),
         with: Some({
@@ -291,7 +291,7 @@ async fn test_wait_seconds() {
     let _step_ctx = StepContext::new(HashMap::new(), HashMap::new(), HashMap::new());
 
     let step = Step {
-        id: "wait_test".to_string(),
+        id: "wait_test".to_string().into(),
         wait: Some(crate::model::WaitSpec {
             seconds: Some(1),
             until: None,

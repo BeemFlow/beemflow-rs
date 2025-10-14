@@ -3,7 +3,6 @@
 //! Loads and manages BeemFlow configuration from flow.config.json
 
 use crate::{BeemFlowError, Result};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -61,6 +60,10 @@ pub struct Config {
     /// MCP configuration
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpConfig>,
+
+    /// Runtime limits configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limits: Option<LimitsConfig>,
 }
 
 /// Storage backend configuration
@@ -199,6 +202,10 @@ pub struct HttpConfig {
     /// Port to bind to
     #[serde(default = "default_port")]
     pub port: u16,
+
+    /// Enable secure cookies (requires HTTPS). Default: false for local development
+    #[serde(default)]
+    pub secure: bool,
 }
 
 fn default_host() -> String {
@@ -279,8 +286,7 @@ pub struct McpServerConfig {
 
 // Custom deserialize to handle:
 // 1. Full URL strings: "http://..." or "https://..."
-// 2. GitHub shorthand: "owner/repo/path@ref"
-// 3. Regular JSON object
+// 2. Regular JSON object
 impl<'de> Deserialize<'de> for McpServerConfig {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -293,7 +299,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
 
         match value {
             Value::String(s) => {
-                // Handle URL or GitHub shorthand
+                // Handle full URLs only
                 if s.contains("://") {
                     // Full URL - use as endpoint
                     Ok(McpServerConfig {
@@ -305,10 +311,10 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                         endpoint: Some(s),
                     })
                 } else {
-                    // Try GitHub shorthand
-                    parse_github_shorthand(&s).ok_or_else(|| {
-                        Error::custom(format!("Invalid MCP server config string: {}", s))
-                    })
+                    Err(Error::custom(format!(
+                        "Invalid MCP server config string: '{}'. Must be a full URL (http://... or https://...) or a JSON object",
+                        s
+                    )))
                 }
             }
             Value::Object(_) => {
@@ -329,45 +335,9 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 })
             }
             _ => Err(Error::custom(
-                "MCP server config must be a string or object",
+                "MCP server config must be a URL string or JSON object",
             )),
         }
-    }
-}
-
-/// Parse GitHub shorthand notation for MCP server configs
-/// Format: owner/repo/path[@ref] where ref defaults to "main"
-///
-/// This fetches the config file from GitHub raw content and parses it.
-/// For now, we construct the URL - actual HTTP fetching can be added later.
-fn parse_github_shorthand(shorthand: &str) -> Option<McpServerConfig> {
-    let github_regex = Regex::new(r"^([^/]+)/([^/]+)/(.+?)(?:@([^/]+))?$").ok()?;
-
-    if let Some(captures) = github_regex.captures(shorthand) {
-        let owner = captures.get(1)?.as_str();
-        let repo = captures.get(2)?.as_str();
-        let path = captures.get(3)?.as_str();
-        let reference = captures.get(4).map(|m| m.as_str()).unwrap_or("main");
-
-        // Construct GitHub raw content URL
-        let url = format!(
-            "https://raw.githubusercontent.com/{}/{}/{}/{}",
-            owner, repo, reference, path
-        );
-
-        // For now, return config with URL as endpoint
-        // In production, this would fetch and parse the JSON from the URL
-        // using reqwest or similar HTTP client
-        Some(McpServerConfig {
-            command: String::new(),
-            args: None,
-            env: None,
-            port: None,
-            transport: Some("http".to_string()),
-            endpoint: Some(url),
-        })
-    } else {
-        None
     }
 }
 
@@ -405,7 +375,54 @@ pub struct McpConfig {
     pub require_auth: bool,
 }
 
+/// Runtime limits configuration for security and resource management
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LimitsConfig {
+    /// Maximum number of concurrent tasks for parallel execution
+    /// Default: 1000
+    #[serde(default = "default_max_concurrent_tasks")]
+    pub max_concurrent_tasks: usize,
+
+    /// Maximum flow file size in bytes
+    /// Default: 10MB (10 * 1024 * 1024)
+    #[serde(default = "default_max_flow_file_size")]
+    pub max_flow_file_size: u64,
+
+    /// Maximum recursion depth for nested structures
+    /// Default: 1000
+    #[serde(default = "default_max_recursion_depth")]
+    pub max_recursion_depth: usize,
+}
+
+fn default_max_concurrent_tasks() -> usize {
+    1000
+}
+
+fn default_max_flow_file_size() -> u64 {
+    10 * 1024 * 1024 // 10MB
+}
+
+fn default_max_recursion_depth() -> usize {
+    1000
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_tasks: default_max_concurrent_tasks(),
+            max_flow_file_size: default_max_flow_file_size(),
+            max_recursion_depth: default_max_recursion_depth(),
+        }
+    }
+}
+
 impl Config {
+    /// Get runtime limits (with defaults if not configured)
+    pub fn get_limits(&self) -> LimitsConfig {
+        self.limits.clone().unwrap_or_default()
+    }
+
     /// Load configuration from file
     pub fn load() -> Result<Self> {
         Self::load_from_path(crate::constants::CONFIG_FILE_NAME)
@@ -543,6 +560,7 @@ impl Default for Config {
             http: Some(HttpConfig {
                 host: default_host(),
                 port: default_port(),
+                secure: false, // Default to false for local development
             }),
             log: Some(LogConfig {
                 level: Some("info".to_string()),
@@ -556,32 +574,9 @@ impl Default for Config {
             mcp: Some(McpConfig {
                 require_auth: false, // Auth disabled by default
             }),
+            limits: Some(LimitsConfig::default()),
         }
     }
-}
-
-/// Expand environment variable references in config values
-/// Supports $env:VARNAME syntax anywhere in the string
-///
-/// Examples:
-/// - "$env:OPENAI_API_KEY" -> value of OPENAI_API_KEY env var
-/// - "Bearer $env:TOKEN" -> "Bearer <token-value>"
-/// - "$env:MISSING_VAR" -> "$env:MISSING_VAR" (unchanged if not found)
-fn expand_env_value(value: &str) -> String {
-    use once_cell::sync::Lazy;
-
-    // Pattern matches $env:VARNAME format where VARNAME starts with letter/underscore
-    // followed by alphanumeric/underscore characters
-    // Safe: This is a valid, compile-time constant regex pattern that cannot fail
-    static ENV_VAR_PATTERN: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"\$env:([A-Za-z_][A-Za-z0-9_]*)").unwrap());
-
-    ENV_VAR_PATTERN
-        .replace_all(value, |caps: &regex::Captures| {
-            let var_name = &caps[1];
-            std::env::var(var_name).unwrap_or_else(|_| caps[0].to_string())
-        })
-        .to_string()
 }
 
 /// Get default local registry path
@@ -589,14 +584,11 @@ pub fn default_local_registry_path() -> PathBuf {
     PathBuf::from(".beemflow/registry.json")
 }
 
-/// Get default local registry full path (resolves relative to project root)
+/// Get default local registry full path (resolves relative to current directory)
 pub fn default_local_registry_full_path() -> PathBuf {
-    // Try to find project root by looking for Cargo.toml or similar markers
-    let current_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
-    // For now, just return the relative path - in a real implementation,
-    // this would walk up the directory tree to find the project root
-    current_dir.join(".beemflow/registry.json")
+    env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".beemflow/registry.json")
 }
 
 /// Parse registry config into specific type if needed
@@ -683,10 +675,10 @@ pub fn validate_config(raw: &[u8]) -> Result<()> {
 pub fn load_config<P: AsRef<Path>>(path: P) -> Result<Config> {
     let path = path.as_ref();
     if !path.exists() {
-        return Err(BeemFlowError::not_found(format!(
-            "Config file not found: {}",
-            path.display()
-        )));
+        return Err(BeemFlowError::not_found(
+            "Config file",
+            path.display().to_string(),
+        ));
     }
 
     let content = fs::read_to_string(path)?;
@@ -724,13 +716,6 @@ pub fn save_config<P: AsRef<Path>>(path: P, cfg: &Config) -> Result<()> {
 
     fs::write(path_ref, content)?;
     Ok(())
-}
-
-/// Upsert MCP server configuration
-pub fn upsert_mcp_server(cfg: &mut Config, name: String, spec: McpServerConfig) {
-    cfg.mcp_servers
-        .get_or_insert_with(HashMap::new)
-        .insert(name, spec);
 }
 
 /// Load MCP servers from registry file
@@ -929,7 +914,7 @@ pub fn inject_env_vars_into_registry(reg: &mut HashMap<String, Value>) {
     for (k, v) in reg.iter_mut() {
         if let Some(str_val) = v.as_str() {
             // Use shared utility to expand $env:VARNAME format
-            let expanded = expand_env_value(str_val);
+            let expanded = crate::utils::expand_env_value(str_val);
             if expanded != *str_val {
                 *v = Value::String(expanded);
             }

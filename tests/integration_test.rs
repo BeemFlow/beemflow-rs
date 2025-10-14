@@ -3,20 +3,20 @@
 //! Tests the complete system end-to-end
 
 use beemflow::dsl::{Validator, parse_file, parse_string};
-use beemflow::storage::Storage;
+use beemflow::storage::{FlowStorage, RunStorage};
 use beemflow::{Engine, Flow};
 use std::collections::HashMap;
 
 #[tokio::test]
 async fn test_hello_world_flow() {
     // Parse the hello_world flow from examples
-    let flow = parse_file("flows/examples/hello_world.flow.yaml").unwrap();
+    let flow = parse_file("flows/examples/hello_world.flow.yaml", None).unwrap();
 
     // Validate it
     assert!(Validator::validate(&flow).is_ok());
 
     // Execute it
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let result = engine.execute(&flow, HashMap::new()).await.unwrap();
     let outputs = result.outputs;
 
@@ -51,7 +51,7 @@ steps:
       text: "test"
 "#;
 
-    let flow = parse_string(yaml).unwrap();
+    let flow = parse_string(yaml, None).unwrap();
     assert!(Validator::validate(&flow).is_ok());
 
     // Invalid flow - missing name
@@ -63,7 +63,7 @@ steps:
     use: core.echo
 "#;
 
-    let invalid_flow = parse_string(invalid_yaml).unwrap();
+    let invalid_flow = parse_string(invalid_yaml, None).unwrap();
 
     // Validation should catch the empty name
     assert!(Validator::validate(&invalid_flow).is_err());
@@ -81,8 +81,8 @@ steps:
       text: "Hello from Rust!"
 "#;
 
-    let flow = parse_string(yaml).unwrap();
-    let engine = Engine::default();
+    let flow = parse_string(yaml, None).unwrap();
+    let engine = Engine::for_testing();
     let result = engine.execute(&flow, HashMap::new()).await.unwrap();
     let outputs = result.outputs;
 
@@ -110,8 +110,8 @@ steps:
       text: "{{ vars.greeting }}, {{ vars.name }}!"
 "#;
 
-    let flow = parse_string(yaml).unwrap();
-    let engine = Engine::default();
+    let flow = parse_string(yaml, None).unwrap();
+    let engine = Engine::for_testing();
     let result = engine.execute(&flow, HashMap::new()).await.unwrap();
     let outputs = result.outputs;
 
@@ -144,8 +144,8 @@ steps:
       text: "Third: {{ step1.text }} and {{ step2.text }}"
 "#;
 
-    let flow = parse_string(yaml).unwrap();
-    let engine = Engine::default();
+    let flow = parse_string(yaml, None).unwrap();
+    let engine = Engine::for_testing();
     let result = engine.execute(&flow, HashMap::new()).await.unwrap();
     let outputs = result.outputs;
 
@@ -197,7 +197,7 @@ catch:
 "#;
 
     let flow: Flow = serde_yaml::from_str(yaml).unwrap();
-    assert_eq!(flow.name, "complete_flow");
+    assert_eq!(flow.name.as_str(), "complete_flow");
     assert_eq!(flow.version.unwrap(), "1.0.0");
     assert!(flow.vars.is_some());
     assert!(flow.catch.is_some());
@@ -207,7 +207,7 @@ catch:
 
 #[tokio::test]
 async fn test_storage_operations() {
-    use beemflow::storage::{MemoryStorage, Storage};
+    use beemflow::storage::MemoryStorage;
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -224,7 +224,7 @@ async fn test_storage_operations() {
     // Test run storage
     let run = beemflow::model::Run {
         id: Uuid::new_v4(),
-        flow_name: "test".to_string(),
+        flow_name: "test".to_string().into(),
         event: HashMap::new(),
         vars: HashMap::new(),
         status: beemflow::model::RunStatus::Running,
@@ -236,7 +236,7 @@ async fn test_storage_operations() {
     storage.save_run(&run).await.unwrap();
     let retrieved_run = storage.get_run(run.id).await.unwrap();
     assert!(retrieved_run.is_some());
-    assert_eq!(retrieved_run.unwrap().flow_name, "test");
+    assert_eq!(retrieved_run.unwrap().flow_name.as_str(), "test");
 }
 
 #[test]
@@ -245,7 +245,7 @@ fn test_graph_generation() {
     use beemflow::model::*;
 
     let flow = Flow {
-        name: "test".to_string(),
+        name: "test".to_string().into(),
         description: None,
         version: None,
         on: Some(Trigger::Single("cli.manual".to_string())),
@@ -253,7 +253,7 @@ fn test_graph_generation() {
         vars: None,
         steps: vec![
             Step {
-                id: "step1".to_string(),
+                id: "step1".to_string().into(),
                 use_: Some("core.echo".to_string()),
                 with: None,
                 depends_on: None,
@@ -268,7 +268,7 @@ fn test_graph_generation() {
                 wait: None,
             },
             Step {
-                id: "step2".to_string(),
+                id: "step2".to_string().into(),
                 use_: Some("core.echo".to_string()),
                 with: None,
                 depends_on: None,
@@ -326,7 +326,7 @@ async fn test_cli_operations_with_fresh_database() {
     // Create registry (simulating CLI initialization)
     let deps = Dependencies {
         storage: storage.clone(),
-        engine: Arc::new(Engine::default()),
+        engine: Arc::new(Engine::for_testing()),
         registry_manager: Arc::new(RegistryManager::standard(None)),
         event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
         config: Arc::new(Config::default()),
@@ -388,7 +388,7 @@ async fn test_mcp_server_with_fresh_database() {
     // Create dependencies
     let deps = Dependencies {
         storage: storage.clone(),
-        engine: Arc::new(Engine::default()),
+        engine: Arc::new(Engine::for_testing()),
         registry_manager: Arc::new(RegistryManager::standard(None)),
         event_bus: Arc::new(InProcEventBus::new()) as Arc<dyn beemflow::event::EventBus>,
         config: Arc::new(Config::default()),

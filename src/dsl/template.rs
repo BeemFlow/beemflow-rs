@@ -32,7 +32,9 @@ impl Templater {
         // This allows {{nonexistent.field}} to return undefined instead of error
         env.set_undefined_behavior(minijinja::UndefinedBehavior::Chainable);
 
-        // Add BeemFlow-specific globals
+        // Add BeemFlow-specific globals - expose env vars for workflow access
+        // NOTE: This exposes all environment variables. In production, consider
+        // filtering sensitive vars or using a whitelist approach.
         let env_vars = std::env::vars().collect::<HashMap<_, _>>();
         let env_value = if let Ok(json_value) = serde_json::to_value(&env_vars) {
             Value::from_serialize(&json_value)
@@ -202,14 +204,6 @@ impl Templater {
 
         // minijinja can convert from serde_json::Value directly
         Value::from_serialize(JsonValue::Object(obj))
-    }
-
-    /// Convert serde_json::Value to minijinja::Value (used only when needed)
-    /// minijinja can handle serde_json::Value directly via Value::from_serialize
-    #[allow(dead_code)]
-    fn json_value_to_minijinja(&self, value: &JsonValue) -> Result<Value> {
-        // minijinja can deserialize from serde_json::Value directly
-        Ok(Value::from_serialize(value))
     }
 }
 

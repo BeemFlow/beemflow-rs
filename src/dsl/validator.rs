@@ -101,12 +101,12 @@ impl Validator {
     }
 
     fn validate_dependencies(flow: &Flow) -> Result<()> {
-        let step_ids: HashSet<_> = flow.steps.iter().map(|s| &s.id).collect();
+        let step_ids: HashSet<_> = flow.steps.iter().map(|s| s.id.as_str()).collect();
 
         for step in &flow.steps {
             if let Some(deps) = &step.depends_on {
                 for dep in deps {
-                    if !step_ids.contains(dep) {
+                    if !step_ids.contains(dep.as_str()) {
                         return Err(BeemFlowError::validation(format!(
                             "Step '{}' depends on non-existent step '{}'",
                             step.id, dep
@@ -322,16 +322,16 @@ impl Validator {
 
     /// Detect circular dependencies in steps
     fn detect_circular_dependencies(flow: &Flow) -> Result<()> {
-        let mut graph: HashMap<&String, Vec<&String>> = HashMap::new();
+        let mut graph: HashMap<String, Vec<String>> = HashMap::new();
 
         // Build dependency graph
         for step in &flow.steps {
             let deps = if let Some(depends_on) = &step.depends_on {
-                depends_on.iter().collect()
+                depends_on.to_vec()
             } else {
                 vec![]
             };
-            graph.insert(&step.id, deps);
+            graph.insert(step.id.to_string(), deps);
         }
 
         // Check for cycles using DFS
@@ -339,8 +339,8 @@ impl Validator {
         let mut rec_stack = HashSet::new();
 
         for step in &flow.steps {
-            if !visited.contains(&step.id)
-                && Self::has_cycle(&step.id, &graph, &mut visited, &mut rec_stack)
+            if !visited.contains(step.id.as_str())
+                && Self::has_cycle(step.id.as_str(), &graph, &mut visited, &mut rec_stack)
             {
                 return Err(BeemFlowError::validation(format!(
                     "Circular dependency detected involving step '{}'",
@@ -353,21 +353,21 @@ impl Validator {
     }
 
     fn has_cycle<'a>(
-        step_id: &'a String,
-        graph: &HashMap<&'a String, Vec<&'a String>>,
-        visited: &mut HashSet<&'a String>,
-        rec_stack: &mut HashSet<&'a String>,
+        step_id: &'a str,
+        graph: &'a HashMap<String, Vec<String>>,
+        visited: &mut HashSet<&'a str>,
+        rec_stack: &mut HashSet<&'a str>,
     ) -> bool {
         visited.insert(step_id);
         rec_stack.insert(step_id);
 
         if let Some(deps) = graph.get(step_id) {
             for dep in deps {
-                if !visited.contains(dep) {
-                    if Self::has_cycle(dep, graph, visited, rec_stack) {
+                if !visited.contains(dep.as_str()) {
+                    if Self::has_cycle(dep.as_str(), graph, visited, rec_stack) {
                         return true;
                     }
-                } else if rec_stack.contains(dep) {
+                } else if rec_stack.contains(dep.as_str()) {
                     return true;
                 }
             }

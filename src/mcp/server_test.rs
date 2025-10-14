@@ -10,7 +10,7 @@ async fn test_mcp_server_creation() {
     
     let deps = Dependencies {
         storage: Arc::new(MemoryStorage::new()),
-        engine: Arc::new(Engine::default()),
+        engine: Arc::new(Engine::for_testing()),
         registry_manager: Arc::new(registry_manager),
         event_bus: Arc::new(InProcEventBus::new()),
         config: Arc::new(Config::default()),
@@ -31,7 +31,7 @@ async fn test_handle_initialize() {
     
     let deps = Dependencies {
         storage: Arc::new(MemoryStorage::new()),
-        engine: Arc::new(Engine::default()),
+        engine: Arc::new(Engine::for_testing()),
         registry_manager: Arc::new(registry_manager),
         event_bus: Arc::new(InProcEventBus::new()),
         config: Arc::new(Config::default()),
@@ -66,7 +66,7 @@ async fn test_handle_tools_list() {
     
     let deps = Dependencies {
         storage: Arc::new(MemoryStorage::new()),
-        engine: Arc::new(Engine::default()),
+        engine: Arc::new(Engine::for_testing()),
         registry_manager: Arc::new(registry_manager),
         event_bus: Arc::new(InProcEventBus::new()),
         config: Arc::new(Config::default()),

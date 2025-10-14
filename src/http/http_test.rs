@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 
 fn create_test_state() -> AppState {
     let storage = Arc::new(MemoryStorage::new());
-    let engine = Arc::new(Engine::default());
+    let engine = Arc::new(Engine::for_testing());
     let registry_manager = Arc::new(RegistryManager::standard(None));
     let event_bus = Arc::new(InProcEventBus::new()) as Arc<dyn crate::event::EventBus>;
     let config = Arc::new(crate::config::Config::default());
@@ -23,11 +23,14 @@ fn create_test_state() -> AppState {
 
     let registry = Arc::new(OperationRegistry::new(deps));
     let session_store = Arc::new(session::SessionStore::new());
-    let oauth_client = Arc::new(crate::auth::OAuthClientManager::new(
-        storage.clone(),
-        registry_manager,
-        "http://localhost:3000/callback".to_string(),
-    ));
+    let oauth_client = Arc::new(
+        crate::auth::OAuthClientManager::new(
+            storage.clone(),
+            registry_manager,
+            "http://localhost:3000/callback".to_string(),
+        )
+        .expect("Failed to create OAuth client manager"),
+    );
     let template_renderer = Arc::new(template::TemplateRenderer::new("static"));
 
     AppState {

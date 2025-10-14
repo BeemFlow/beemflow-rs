@@ -56,7 +56,7 @@ impl Default for MemoryStorage {
 }
 
 #[async_trait]
-impl Storage for MemoryStorage {
+impl RunStorage for MemoryStorage {
     // Run methods
     async fn save_run(&self, run: &Run) -> Result<()> {
         self.runs.insert(run.id, run.clone());
@@ -109,7 +109,10 @@ impl Storage for MemoryStorage {
             .map(|r| r.clone())
             .unwrap_or_default())
     }
+}
 
+#[async_trait]
+impl StateStorage for MemoryStorage {
     // Wait/timeout methods
     async fn register_wait(&self, token: Uuid, wake_at: Option<i64>) -> Result<()> {
         self.wait_tokens.insert(token, wake_at);
@@ -145,7 +148,10 @@ impl Storage for MemoryStorage {
         // Atomically remove and return the value (DashMap::remove returns Option<(K, V)>)
         Ok(self.paused_runs.remove(token).map(|(_, v)| v))
     }
+}
 
+#[async_trait]
+impl FlowStorage for MemoryStorage {
     // Flow management methods
     async fn save_flow(&self, name: &str, content: &str, version: Option<&str>) -> Result<()> {
         self.flows.insert(name.to_string(), content.to_string());
@@ -247,7 +253,10 @@ impl Storage for MemoryStorage {
         snapshots.sort_unstable_by(|a, b| b.deployed_at.cmp(&a.deployed_at));
         Ok(snapshots)
     }
+}
 
+#[async_trait]
+impl OAuthStorage for MemoryStorage {
     // OAuth credential methods
     async fn save_oauth_credential(&self, credential: &OAuthCredential) -> Result<()> {
         let key = credential.unique_key();
@@ -294,10 +303,7 @@ impl Storage for MemoryStorage {
                 return Ok(());
             }
         }
-        Err(crate::BeemFlowError::not_found(format!(
-            "OAuth credential not found: {}",
-            id
-        )))
+        Err(crate::BeemFlowError::not_found("OAuth credential", id))
     }
 
     // OAuth provider methods

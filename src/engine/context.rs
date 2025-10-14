@@ -1,19 +1,27 @@
 //! Step execution context
 //!
 //! Manages event data, variables, outputs, and secrets during workflow execution.
+//! Also provides template access to previous run outputs.
+//!
+//! Optimized for read-heavy workloads:
+//! - Event, vars, and secrets are immutable after creation (Arc<HashMap>)
+//! - Outputs use DashMap for lock-free concurrent writes
 
-use parking_lot::RwLock;
+use crate::model::{RunStatus, StepStatus};
+use crate::storage::Storage;
+use dashmap::DashMap;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use uuid::Uuid;
 
 /// Context for step execution
 #[derive(Debug, Clone)]
 pub struct StepContext {
-    event: Arc<RwLock<HashMap<String, Value>>>,
-    vars: Arc<RwLock<HashMap<String, Value>>>,
-    outputs: Arc<RwLock<HashMap<String, Value>>>,
-    secrets: Arc<RwLock<HashMap<String, Value>>>,
+    event: Arc<HashMap<String, Value>>,
+    vars: Arc<HashMap<String, Value>>,
+    outputs: Arc<DashMap<String, Value>>,
+    secrets: Arc<HashMap<String, Value>>,
 }
 
 // Custom Serialize implementation for StepContext
@@ -47,46 +55,34 @@ impl StepContext {
         secrets: HashMap<String, Value>,
     ) -> Self {
         Self {
-            event: Arc::new(RwLock::new(event)),
-            vars: Arc::new(RwLock::new(vars)),
-            outputs: Arc::new(RwLock::new(HashMap::new())),
-            secrets: Arc::new(RwLock::new(secrets)),
+            event: Arc::new(event),
+            vars: Arc::new(vars),
+            outputs: Arc::new(DashMap::new()),
+            secrets: Arc::new(secrets),
         }
     }
 
     /// Get an output value
     pub fn get_output(&self, key: &str) -> Option<Value> {
-        self.outputs.read().get(key).cloned()
+        self.outputs.get(key).map(|v| v.clone())
     }
 
     /// Set an output value
     pub fn set_output(&self, key: String, value: Value) {
-        self.outputs.write().insert(key, value);
-    }
-
-    /// Set an event value
-    pub fn set_event(&self, key: String, value: Value) {
-        self.event.write().insert(key, value);
-    }
-
-    /// Set a variable value
-    pub fn set_var(&self, key: String, value: Value) {
-        self.vars.write().insert(key, value);
-    }
-
-    /// Set a secret value
-    #[allow(dead_code)]
-    pub fn set_secret(&self, key: String, value: Value) {
-        self.secrets.write().insert(key, value);
+        self.outputs.insert(key, value);
     }
 
     /// Get a snapshot of the context (cloned data)
     pub fn snapshot(&self) -> ContextSnapshot {
         ContextSnapshot {
-            event: self.event.read().clone(),
-            vars: self.vars.read().clone(),
-            outputs: self.outputs.read().clone(),
-            secrets: self.secrets.read().clone(),
+            event: (*self.event).clone(),
+            vars: (*self.vars).clone(),
+            outputs: self
+                .outputs
+                .iter()
+                .map(|r| (r.key().clone(), r.value().clone()))
+                .collect(),
+            secrets: (*self.secrets).clone(),
         }
     }
 
@@ -224,4 +220,100 @@ pub fn is_valid_identifier(s: &str) -> bool {
     }
 
     s.chars().all(|c| c.is_alphanumeric() || c == '_')
+}
+
+// ============================================================================
+// Previous Run Access
+// ============================================================================
+
+/// Provides template access to previous run outputs
+///
+/// This helper allows accessing outputs from the most recent previous run
+/// of the same workflow through the `runs.previous()` template function.
+#[derive(Clone)]
+pub struct RunsAccess {
+    storage: Arc<dyn Storage>,
+    current_run_id: Option<Uuid>,
+    flow_name: String,
+}
+
+impl RunsAccess {
+    /// Create a new runs access helper
+    pub fn new(storage: Arc<dyn Storage>, current_run_id: Option<Uuid>, flow_name: String) -> Self {
+        Self {
+            storage,
+            current_run_id,
+            flow_name,
+        }
+    }
+
+    /// Get outputs from the most recent previous run of the same workflow
+    ///
+    /// Returns a map with:
+    /// - id: Run ID as string
+    /// - outputs: Map of step outputs
+    /// - status: Run status
+    /// - flow: Flow name
+    ///
+    /// Returns empty map if no previous run found.
+    pub async fn previous(&self) -> HashMap<String, Value> {
+        // Get all runs
+        let runs = match self.storage.list_runs().await {
+            Ok(runs) => runs,
+            Err(_) => return HashMap::new(),
+        };
+
+        // Find the most recent successful run from the same workflow
+        for run in runs {
+            // Only consider runs from the same workflow
+            if run.flow_name.as_str() != self.flow_name {
+                continue;
+            }
+
+            // Skip the current run
+            if let Some(current_id) = self.current_run_id
+                && run.id == current_id
+            {
+                continue;
+            }
+
+            // Only return successful runs
+            if run.status != RunStatus::Succeeded {
+                continue;
+            }
+
+            // Get step outputs for this run
+            let steps = match self.storage.get_steps(run.id).await {
+                Ok(steps) => steps,
+                Err(_) => continue,
+            };
+
+            // Aggregate step outputs
+            let mut outputs = HashMap::new();
+            for step in steps {
+                if step.status == StepStatus::Succeeded
+                    && let Some(ref step_outputs) = step.outputs
+                {
+                    outputs.insert(
+                        step.step_name.clone(),
+                        serde_json::to_value(step_outputs).unwrap_or(Value::Null),
+                    );
+                }
+            }
+
+            // Return the first matching run (most recent due to ordering)
+            return serde_json::json!({
+                "id": run.id.to_string(),
+                "outputs": outputs,
+                "status": format!("{:?}", run.status),
+                "flow": run.flow_name,
+            })
+            .as_object()
+            .map(|obj| obj.clone().into_iter().collect())
+            .unwrap_or_default();
+        }
+
+        // No previous run found
+        HashMap::new()
+    }
 }

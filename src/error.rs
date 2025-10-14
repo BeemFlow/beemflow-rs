@@ -47,8 +47,8 @@ pub enum BeemFlowError {
     #[error("YAML error: {0}")]
     Yaml(#[from] serde_yaml::Error),
 
-    #[error("{0}")]
-    Other(#[from] anyhow::Error),
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
 
 /// Template-specific errors
@@ -71,10 +71,10 @@ pub enum TemplateError {
 #[derive(Error, Debug)]
 pub enum StorageError {
     #[error("Database error: {0}")]
-    Database(String),
+    Database(#[source] sqlx::Error),
 
-    #[error("Not found: {0}")]
-    NotFound(String),
+    #[error("Not found: {entity} '{id}'")]
+    NotFound { entity: String, id: String },
 
     #[error("Connection error: {0}")]
     Connection(String),
@@ -86,10 +86,10 @@ pub enum StorageError {
     JsonError(#[from] serde_json::Error),
 }
 
-// Implement From for sqlx::Error
+// Implement From for sqlx::Error - now preserves the original error
 impl From<sqlx::Error> for StorageError {
     fn from(err: sqlx::Error) -> Self {
-        StorageError::Database(err.to_string())
+        StorageError::Database(err)
     }
 }
 
@@ -144,10 +144,10 @@ impl BeemFlowError {
         BeemFlowError::Config(msg.into())
     }
 
-    /// Create a storage error
+    /// Create a storage error with a message
     #[inline]
     pub fn storage<S: Into<String>>(msg: S) -> Self {
-        BeemFlowError::Storage(StorageError::Database(msg.into()))
+        BeemFlowError::Storage(StorageError::Connection(msg.into()))
     }
 
     /// Create an auth error
@@ -158,8 +158,11 @@ impl BeemFlowError {
 
     /// Create a not found error
     #[inline]
-    pub fn not_found<S: Into<String>>(msg: S) -> Self {
-        BeemFlowError::Other(anyhow::anyhow!(msg.into()))
+    pub fn not_found(entity: impl Into<String>, id: impl Into<String>) -> Self {
+        BeemFlowError::Storage(StorageError::NotFound {
+            entity: entity.into(),
+            id: id.into(),
+        })
     }
 
     /// Create a step execution error
@@ -168,6 +171,26 @@ impl BeemFlowError {
         BeemFlowError::StepExecution {
             step_id: step_id.into(),
             message: message.into(),
+        }
+    }
+
+    /// Create an internal error for unexpected conditions
+    #[inline]
+    pub fn internal<S: Into<String>>(msg: S) -> Self {
+        BeemFlowError::Internal(msg.into())
+    }
+
+    /// Add context to an error
+    pub fn context<C: std::fmt::Display>(self, context: C) -> Self {
+        match self {
+            Self::Validation(msg) => Self::Validation(format!("{}: {}", context, msg)),
+            Self::Adapter(msg) => Self::Adapter(format!("{}: {}", context, msg)),
+            Self::Config(msg) => Self::Config(format!("{}: {}", context, msg)),
+            Self::OAuth(msg) => Self::OAuth(format!("{}: {}", context, msg)),
+            Self::Mcp(msg) => Self::Mcp(format!("{}: {}", context, msg)),
+            Self::Internal(msg) => Self::Internal(format!("{}: {}", context, msg)),
+            // For errors with source, preserve the source and add context at the top level
+            other => Self::Internal(format!("{}: {}", context, other)),
         }
     }
 }

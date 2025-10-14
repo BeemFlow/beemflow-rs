@@ -2,7 +2,7 @@
 //!
 //! Provides a production-ready PostgreSQL implementation of the Storage trait.
 
-use super::{FlowSnapshot, Storage, sql_common::*};
+use super::{FlowSnapshot, FlowStorage, OAuthStorage, RunStorage, StateStorage, sql_common::*};
 use crate::{BeemFlowError, Result, model::*};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -33,7 +33,7 @@ impl PostgresStorage {
     fn parse_run(row: &PgRow) -> Result<Run> {
         Ok(Run {
             id: row.try_get("id")?,
-            flow_name: row.try_get("flow_name")?,
+            flow_name: row.try_get::<String, _>("flow_name")?.into(),
             event: parse_hashmap_from_jsonb(row.try_get("event")?),
             vars: parse_hashmap_from_jsonb(row.try_get("vars")?),
             status: parse_run_status(&row.try_get::<String, _>("status")?),
@@ -49,7 +49,7 @@ impl PostgresStorage {
         Ok(StepRun {
             id: row.try_get("id")?,
             run_id: row.try_get("run_id")?,
-            step_name: row.try_get("step_name")?,
+            step_name: row.try_get::<String, _>("step_name")?.into(),
             status: parse_step_status(&row.try_get::<String, _>("status")?),
             started_at: row.try_get("started_at")?,
             ended_at: row.try_get("ended_at")?,
@@ -62,7 +62,7 @@ impl PostgresStorage {
 }
 
 #[async_trait]
-impl Storage for PostgresStorage {
+impl RunStorage for PostgresStorage {
     // Run methods
     async fn save_run(&self, run: &Run) -> Result<()> {
         sqlx::query(
@@ -77,7 +77,7 @@ impl Storage for PostgresStorage {
                 ended_at = EXCLUDED.ended_at",
         )
         .bind(run.id)
-        .bind(&run.flow_name)
+        .bind(run.flow_name.as_str())
         .bind(serde_json::to_value(&run.event)?)
         .bind(serde_json::to_value(&run.vars)?)
         .bind(run_status_to_str(run.status))
@@ -138,7 +138,7 @@ impl Storage for PostgresStorage {
              ON CONFLICT(id) DO NOTHING",
         )
         .bind(run.id)
-        .bind(&run.flow_name)
+        .bind(run.flow_name.as_str())
         .bind(serde_json::to_value(&run.event)?)
         .bind(serde_json::to_value(&run.vars)?)
         .bind(run_status_to_str(run.status))
@@ -167,7 +167,7 @@ impl Storage for PostgresStorage {
         )
         .bind(step.id)
         .bind(step.run_id)
-        .bind(&step.step_name)
+        .bind(step.step_name.as_str())
         .bind(step_status_to_str(step.status))
         .bind(step.started_at)
         .bind(step.ended_at)
@@ -196,7 +196,10 @@ impl Storage for PostgresStorage {
         }
         Ok(steps)
     }
+}
 
+#[async_trait]
+impl StateStorage for PostgresStorage {
     // Wait/timeout methods
     async fn register_wait(&self, token: Uuid, wake_at: Option<i64>) -> Result<()> {
         sqlx::query(
@@ -274,7 +277,10 @@ impl Storage for PostgresStorage {
             None => Ok(None),
         }
     }
+}
 
+#[async_trait]
+impl FlowStorage for PostgresStorage {
     // Flow management methods
     async fn save_flow(&self, name: &str, content: &str, _version: Option<&str>) -> Result<()> {
         let now = Utc::now();
@@ -440,7 +446,10 @@ impl Storage for PostgresStorage {
 
         Ok(snapshots)
     }
+}
 
+#[async_trait]
+impl OAuthStorage for PostgresStorage {
     // OAuth credential methods (similar pattern to SQLite)
     async fn save_oauth_credential(&self, credential: &OAuthCredential) -> Result<()> {
         sqlx::query(
@@ -535,10 +544,7 @@ impl Storage for PostgresStorage {
             .await?;
 
         if result.rows_affected() == 0 {
-            return Err(BeemFlowError::not_found(format!(
-                "OAuth credential not found: {}",
-                id
-            )));
+            return Err(BeemFlowError::not_found("OAuth credential", id));
         }
 
         Ok(())
@@ -563,10 +569,7 @@ impl Storage for PostgresStorage {
         .await?;
 
         if result.rows_affected() == 0 {
-            return Err(BeemFlowError::not_found(format!(
-                "OAuth credential not found: {}",
-                id
-            )));
+            return Err(BeemFlowError::not_found("OAuth credential", id));
         }
 
         Ok(())
@@ -617,7 +620,7 @@ impl Storage for PostgresStorage {
                 let scopes_json: serde_json::Value = row.try_get("scopes")?;
                 Ok(Some(OAuthProvider {
                     id: row.try_get::<String, _>("id")?,
-                    name: row.try_get::<String, _>("id")?, // Use ID as name for backwards compat
+                    name: row.try_get::<String, _>("id")?, // DB schema has no name column, duplicate id
                     client_id: row.try_get("client_id")?,
                     client_secret: row.try_get("client_secret")?,
                     auth_url: row.try_get("auth_url")?,
@@ -645,7 +648,7 @@ impl Storage for PostgresStorage {
             let scopes_json: serde_json::Value = row.try_get("scopes")?;
             providers.push(OAuthProvider {
                 id: row.try_get::<String, _>("id")?,
-                name: row.try_get::<String, _>("id")?, // Use ID as name for backwards compat
+                name: row.try_get::<String, _>("id")?, // DB schema has no name column, duplicate id
                 client_id: row.try_get("client_id")?,
                 client_secret: row.try_get("client_secret")?,
                 auth_url: row.try_get("auth_url")?,
@@ -666,10 +669,7 @@ impl Storage for PostgresStorage {
             .await?;
 
         if result.rows_affected() == 0 {
-            return Err(BeemFlowError::not_found(format!(
-                "OAuth provider not found: {}",
-                id
-            )));
+            return Err(BeemFlowError::not_found("OAuth provider", id));
         }
 
         Ok(())
@@ -789,10 +789,7 @@ impl Storage for PostgresStorage {
             .await?;
 
         if result.rows_affected() == 0 {
-            return Err(BeemFlowError::not_found(format!(
-                "OAuth client not found: {}",
-                id
-            )));
+            return Err(BeemFlowError::not_found("OAuth client", id));
         }
 
         Ok(())
@@ -849,15 +846,18 @@ impl Storage for PostgresStorage {
     }
 
     async fn get_oauth_token_by_code(&self, code: &str) -> Result<Option<OAuthToken>> {
-        self.get_oauth_token_by_field("code", code).await
+        self.get_oauth_token_by_field(OAuthTokenField::Code, code)
+            .await
     }
 
     async fn get_oauth_token_by_access(&self, access: &str) -> Result<Option<OAuthToken>> {
-        self.get_oauth_token_by_field("access", access).await
+        self.get_oauth_token_by_field(OAuthTokenField::Access, access)
+            .await
     }
 
     async fn get_oauth_token_by_refresh(&self, refresh: &str) -> Result<Option<OAuthToken>> {
-        self.get_oauth_token_by_field("refresh", refresh).await
+        self.get_oauth_token_by_field(OAuthTokenField::Refresh, refresh)
+            .await
     }
 
     async fn delete_oauth_token_by_code(&self, code: &str) -> Result<()> {
@@ -885,21 +885,42 @@ impl Storage for PostgresStorage {
     }
 }
 
+/// OAuth token field selector (prevents SQL injection)
+enum OAuthTokenField {
+    Code,
+    Access,
+    Refresh,
+}
+
 impl PostgresStorage {
     async fn get_oauth_token_by_field(
         &self,
-        field: &str,
+        field: OAuthTokenField,
         value: &str,
     ) -> Result<Option<OAuthToken>> {
-        let query = format!(
-            "SELECT id, client_id, user_id, redirect_uri, scope, code, code_create_at, code_expires_in,
-                    code_challenge, code_challenge_method, access, access_create_at, access_expires_in,
-                    refresh, refresh_create_at, refresh_expires_in
-             FROM oauth_tokens WHERE {} = $1",
-            field
-        );
+        // Use explicit match to prevent SQL injection
+        let query = match field {
+            OAuthTokenField::Code => {
+                "SELECT id, client_id, user_id, redirect_uri, scope, code, code_create_at, code_expires_in,
+                        code_challenge, code_challenge_method, access, access_create_at, access_expires_in,
+                        refresh, refresh_create_at, refresh_expires_in
+                 FROM oauth_tokens WHERE code = $1"
+            }
+            OAuthTokenField::Access => {
+                "SELECT id, client_id, user_id, redirect_uri, scope, code, code_create_at, code_expires_in,
+                        code_challenge, code_challenge_method, access, access_create_at, access_expires_in,
+                        refresh, refresh_create_at, refresh_expires_in
+                 FROM oauth_tokens WHERE access = $1"
+            }
+            OAuthTokenField::Refresh => {
+                "SELECT id, client_id, user_id, redirect_uri, scope, code, code_create_at, code_expires_in,
+                        code_challenge, code_challenge_method, access, access_create_at, access_expires_in,
+                        refresh, refresh_create_at, refresh_expires_in
+                 FROM oauth_tokens WHERE refresh = $1"
+            }
+        };
 
-        let row = sqlx::query(&query)
+        let row = sqlx::query(query)
             .bind(value)
             .fetch_optional(&self.pool)
             .await?;
@@ -918,18 +939,33 @@ impl PostgresStorage {
                     scope: row.try_get("scope")?,
                     code: row.try_get("code")?,
                     code_create_at: row.try_get("code_create_at")?,
-                    code_expires_in: code_expires_in_secs
-                        .map(|s| std::time::Duration::from_secs(s as u64)),
+                    code_expires_in: code_expires_in_secs.and_then(|s| {
+                        if s >= 0 {
+                            Some(std::time::Duration::from_secs(s as u64))
+                        } else {
+                            None
+                        }
+                    }),
                     code_challenge: row.try_get("code_challenge").ok(),
                     code_challenge_method: row.try_get("code_challenge_method").ok(),
                     access: row.try_get("access")?,
                     access_create_at: row.try_get("access_create_at")?,
-                    access_expires_in: access_expires_in_secs
-                        .map(|s| std::time::Duration::from_secs(s as u64)),
+                    access_expires_in: access_expires_in_secs.and_then(|s| {
+                        if s >= 0 {
+                            Some(std::time::Duration::from_secs(s as u64))
+                        } else {
+                            None
+                        }
+                    }),
                     refresh: row.try_get("refresh")?,
                     refresh_create_at: row.try_get("refresh_create_at")?,
-                    refresh_expires_in: refresh_expires_in_secs
-                        .map(|s| std::time::Duration::from_secs(s as u64)),
+                    refresh_expires_in: refresh_expires_in_secs.and_then(|s| {
+                        if s >= 0 {
+                            Some(std::time::Duration::from_secs(s as u64))
+                        } else {
+                            None
+                        }
+                    }),
                 }))
             }
             None => Ok(None),

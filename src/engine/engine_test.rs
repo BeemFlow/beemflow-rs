@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 #[tokio::test]
 async fn test_engine_creation() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let adapters = engine.adapters.all();
     assert!(!adapters.is_empty());
 
@@ -59,16 +59,16 @@ fn test_adapter_registration() {
 
 #[tokio::test]
 async fn test_execute_minimal_valid_flow() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let flow = Flow {
-        name: "test".to_string(),
+        name: "test".to_string().into(),
         description: None,
         version: None,
         on: Some(Trigger::Single("cli.manual".to_string())),
         cron: None,
         vars: None,
         steps: vec![Step {
-            id: "s1".to_string(),
+            id: "s1".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some({
                 let mut m = HashMap::new();
@@ -90,9 +90,9 @@ async fn test_execute_minimal_valid_flow() {
 
 #[tokio::test]
 async fn test_execute_empty_steps() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let flow = Flow {
-        name: "empty".to_string(),
+        name: "empty".to_string().into(),
         description: None,
         version: None,
         on: Some(Trigger::Single("cli.manual".to_string())),
@@ -114,16 +114,16 @@ async fn test_execute_empty_steps() {
 
 #[tokio::test]
 async fn test_execute_with_event_data() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let flow = Flow {
-        name: "event_test".to_string(),
+        name: "event_test".to_string().into(),
         description: None,
         version: None,
         on: Some(Trigger::Single("cli.manual".to_string())),
         cron: None,
         vars: None,
         steps: vec![Step {
-            id: "echo_event".to_string(),
+            id: "echo_event".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some({
                 let mut m = HashMap::new();
@@ -148,9 +148,9 @@ async fn test_execute_with_event_data() {
 
 #[tokio::test]
 async fn test_execute_with_vars() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let flow = Flow {
-        name: "vars_test".to_string(),
+        name: "vars_test".to_string().into(),
         description: None,
         version: None,
         on: Some(Trigger::Single("cli.manual".to_string())),
@@ -162,7 +162,7 @@ async fn test_execute_with_vars() {
             m
         }),
         steps: vec![Step {
-            id: "echo_vars".to_string(),
+            id: "echo_vars".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some({
                 let mut m = HashMap::new();
@@ -189,9 +189,9 @@ async fn test_execute_with_vars() {
 
 #[tokio::test]
 async fn test_execute_step_output_chaining() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let flow = Flow {
-        name: "chaining_test".to_string(),
+        name: "chaining_test".to_string().into(),
         description: None,
         version: None,
         on: Some(Trigger::Single("cli.manual".to_string())),
@@ -199,7 +199,7 @@ async fn test_execute_step_output_chaining() {
         vars: None,
         steps: vec![
             Step {
-                id: "step1".to_string(),
+                id: "step1".to_string().into(),
                 use_: Some("core.echo".to_string()),
                 with: Some({
                     let mut m = HashMap::new();
@@ -209,7 +209,7 @@ async fn test_execute_step_output_chaining() {
                 ..Default::default()
             },
             Step {
-                id: "step2".to_string(),
+                id: "step2".to_string().into(),
                 use_: Some("core.echo".to_string()),
                 with: Some({
                     let mut m = HashMap::new();
@@ -240,16 +240,16 @@ async fn test_execute_step_output_chaining() {
 
 #[tokio::test]
 async fn test_execute_concurrent_flows() {
-    let engine = Arc::new(Engine::default());
+    let engine = Arc::new(Engine::for_testing());
     let flow = Arc::new(Flow {
-        name: "concurrent".to_string(),
+        name: "concurrent".to_string().into(),
         description: None,
         version: None,
         on: Some(Trigger::Single("cli.manual".to_string())),
         cron: None,
         vars: None,
         steps: vec![Step {
-            id: "s1".to_string(),
+            id: "s1".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some({
                 let mut m = HashMap::new();
@@ -284,23 +284,23 @@ async fn test_execute_concurrent_flows() {
 
 #[tokio::test]
 async fn test_execute_catch_block() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let flow = Flow {
-        name: "catch_test".to_string(),
+        name: "catch_test".to_string().into(),
         description: None,
         version: None,
         on: Some(Trigger::Single("cli.manual".to_string())),
         cron: None,
         vars: None,
         steps: vec![Step {
-            id: "fail".to_string(),
+            id: "fail".to_string().into(),
             use_: Some("nonexistent.adapter".to_string()),
             with: None,
             ..Default::default()
         }],
         catch: Some(vec![
             Step {
-                id: "catch1".to_string(),
+                id: "catch1".to_string().into(),
                 use_: Some("core.echo".to_string()),
                 with: Some({
                     let mut m = HashMap::new();
@@ -310,7 +310,7 @@ async fn test_execute_catch_block() {
                 ..Default::default()
             },
             Step {
-                id: "catch2".to_string(),
+                id: "catch2".to_string().into(),
                 use_: Some("core.echo".to_string()),
                 with: Some({
                     let mut m = HashMap::new();
@@ -327,22 +327,74 @@ async fn test_execute_catch_block() {
     // Should error (fail step) but catch blocks should run
     assert!(result.is_err(), "Should error from fail step");
 
-    // TODO: Verify catch block outputs are available
-    // This requires engine to return both error and partial outputs
+    // Verify catch block outputs are stored in the run
+    let storage = engine.storage();
+    let runs = storage.list_runs().await.expect("Failed to list runs");
+
+    // Find the catch_test run
+    let catch_run = runs
+        .iter()
+        .find(|r| r.flow_name.as_str() == "catch_test")
+        .expect("Should have a catch_test run");
+
+    // Verify catch blocks were executed and recorded
+    assert!(
+        catch_run.steps.is_some(),
+        "Run should have step records for catch blocks"
+    );
+
+    let steps = catch_run.steps.as_ref().unwrap();
+    assert_eq!(steps.len(), 2, "Should have 2 catch block step records");
+
+    // Verify catch1 step
+    let catch1 = steps
+        .iter()
+        .find(|s| s.step_name.as_str() == "catch1")
+        .expect("Should have catch1 step record");
+    assert_eq!(
+        catch1.status,
+        crate::model::StepStatus::Succeeded,
+        "catch1 should succeed"
+    );
+    assert!(catch1.outputs.is_some(), "catch1 should have outputs");
+    let catch1_outputs = catch1.outputs.as_ref().unwrap();
+    assert_eq!(
+        catch1_outputs.get("text").and_then(|v| v.as_str()),
+        Some("caught!"),
+        "catch1 output should contain 'caught!'"
+    );
+
+    // Verify catch2 step
+    let catch2 = steps
+        .iter()
+        .find(|s| s.step_name.as_str() == "catch2")
+        .expect("Should have catch2 step record");
+    assert_eq!(
+        catch2.status,
+        crate::model::StepStatus::Succeeded,
+        "catch2 should succeed"
+    );
+    assert!(catch2.outputs.is_some(), "catch2 should have outputs");
+    let catch2_outputs = catch2.outputs.as_ref().unwrap();
+    assert_eq!(
+        catch2_outputs.get("text").and_then(|v| v.as_str()),
+        Some("second!"),
+        "catch2 output should contain 'second!'"
+    );
 }
 
 #[tokio::test]
 async fn test_execute_secrets_injection() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let flow = Flow {
-        name: "secrets_test".to_string(),
+        name: "secrets_test".to_string().into(),
         description: None,
         version: None,
         on: Some(Trigger::Single("cli.manual".to_string())),
         cron: None,
         vars: None,
         steps: vec![Step {
-            id: "s1".to_string(),
+            id: "s1".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some({
                 let mut m = HashMap::new();
@@ -377,16 +429,16 @@ async fn test_execute_secrets_injection() {
 
 #[tokio::test]
 async fn test_execute_secrets_dot_access() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let flow = Flow {
-        name: "secrets_dot".to_string(),
+        name: "secrets_dot".to_string().into(),
         description: None,
         version: None,
         on: Some(Trigger::Single("cli.manual".to_string())),
         cron: None,
         vars: None,
         steps: vec![Step {
-            id: "s1".to_string(),
+            id: "s1".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some({
                 let mut m = HashMap::new();
@@ -430,16 +482,16 @@ async fn test_execute_secrets_dot_access() {
 
 #[tokio::test]
 async fn test_execute_array_access_in_template() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let flow = Flow {
-        name: "array_access".to_string(),
+        name: "array_access".to_string().into(),
         description: None,
         version: None,
         on: Some(Trigger::Single("cli.manual".to_string())),
         cron: None,
         vars: None,
         steps: vec![Step {
-            id: "s1".to_string(),
+            id: "s1".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some({
                 let mut m = HashMap::new();
@@ -486,16 +538,16 @@ async fn test_execute_array_access_in_template() {
 
 #[tokio::test]
 async fn test_adapter_error_propagation() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let flow = Flow {
-        name: "adapter_error".to_string(),
+        name: "adapter_error".to_string().into(),
         description: None,
         version: None,
         on: Some(Trigger::Single("cli.manual".to_string())),
         cron: None,
         vars: None,
         steps: vec![Step {
-            id: "s1".to_string(),
+            id: "s1".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some(HashMap::new()), // Empty with - should not error
             ..Default::default()
@@ -518,16 +570,16 @@ async fn test_environment_variables_in_templates() {
         std::env::set_var("BEEMFLOW_TEST_TOKEN", "secret_token_456");
     }
 
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let flow = Flow {
-        name: "env_test".to_string(),
+        name: "env_test".to_string().into(),
         description: None,
         version: None,
         on: Some(Trigger::Single("cli.manual".to_string())),
         cron: None,
         vars: None,
         steps: vec![Step {
-            id: "test_env".to_string(),
+            id: "test_env".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some({
                 let mut m = HashMap::new();
@@ -570,7 +622,7 @@ async fn test_environment_variables_in_templates() {
 
 #[test]
 fn test_generate_deterministic_run_id() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let flow_name = "test-flow";
     let event: HashMap<String, serde_json::Value> = {
         let mut m = HashMap::new();
@@ -646,7 +698,7 @@ fn test_generate_deterministic_run_id() {
 
 #[test]
 fn test_generate_deterministic_run_id_time_window() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     // Verify that UUIDs within the same minute window are identical
     let flow_name = "test-flow";
     let event: HashMap<String, serde_json::Value> = {
@@ -674,10 +726,10 @@ async fn test_await_event_resume_roundtrip() {
     let flow_content = std::fs::read_to_string("flows/examples/await_resume_demo.flow.yaml")
         .expect("Failed to read await_resume_demo.flow.yaml");
 
-    let flow = parse_string(&flow_content).expect("Failed to parse flow");
+    let flow = parse_string(&flow_content, None).expect("Failed to parse flow");
 
     // Create engine with default settings
-    let engine = Arc::new(Engine::default());
+    let engine = Arc::new(Engine::for_testing());
 
     // Start the flow with input and token
     let mut start_event = HashMap::new();

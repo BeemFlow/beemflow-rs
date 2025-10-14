@@ -9,7 +9,7 @@ async fn test_save_and_get_run() {
     let storage = MemoryStorage::new();
     let run = Run {
         id: Uuid::new_v4(),
-        flow_name: "test".to_string(),
+        flow_name: "test".to_string().into(),
         event: HashMap::new(),
         vars: HashMap::new(),
         status: RunStatus::Running,
@@ -21,7 +21,7 @@ async fn test_save_and_get_run() {
     storage.save_run(&run).await.unwrap();
     let retrieved = storage.get_run(run.id).await.unwrap();
     assert!(retrieved.is_some());
-    assert_eq!(retrieved.unwrap().flow_name, "test");
+    assert_eq!(retrieved.unwrap().flow_name.as_str(), "test");
 }
 
 #[tokio::test]
@@ -30,7 +30,7 @@ async fn test_delete_run() {
     let run_id = Uuid::new_v4();
     let run = Run {
         id: run_id,
-        flow_name: "test".to_string(),
+        flow_name: "test".to_string().into(),
         event: HashMap::new(),
         vars: HashMap::new(),
         status: RunStatus::Running,

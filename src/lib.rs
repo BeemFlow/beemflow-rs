@@ -20,18 +20,20 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use beemflow::engine::Engine;
-//! use std::collections::HashMap;
+//! use beemflow::core::create_dependencies;
+//! use beemflow::config::Config;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Create engine and execute a flow
-//!     let engine = Engine::default();
-//!     
-//!     let flow = beemflow::dsl::parse_file("flow.yaml")?;
-//!     let outputs = engine.execute(&flow, HashMap::new()).await?;
+//!     // Initialize dependencies (engine, storage, etc.)
+//!     let config = Config::default();
+//!     let deps = create_dependencies(&config).await?;
+//!
+//!     // Execute a flow
+//!     let flow = beemflow::dsl::parse_file("flow.yaml", None)?;
+//!     let outputs = deps.engine.execute(&flow, std::collections::HashMap::new()).await?;
 //!     println!("{:?}", outputs);
-//!     
+//!
 //!     Ok(())
 //! }
 //! ```
@@ -72,7 +74,7 @@ pub mod utils;
 // Re-exports for convenience
 pub use engine::Engine;
 pub use error::{BeemFlowError, Result};
-pub use model::{Flow, Run, Step};
+pub use model::{Flow, FlowName, ResumeToken, Run, RunId, Step, StepId};
 
 /// Initialize logging for the application
 pub fn init_logging() {
@@ -83,6 +85,3 @@ pub fn init_logging() {
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 }
-
-#[cfg(test)]
-mod model_test;

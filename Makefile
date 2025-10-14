@@ -86,7 +86,35 @@ test-all: test integration e2e
 # Code quality
 # ────────────────────────────────────────────────────────────────────────────
 
-check: fmt lint test
+# Run all checks (matches CI pipeline)
+check:
+	@echo "🔍 Running all quality checks..."
+	@echo ""
+	@echo "📋 Step 1/4: Checking formatting..."
+	@cargo fmt -- --check
+	@echo "✅ Formatting OK"
+	@echo ""
+	@echo "📋 Step 2/4: Running clippy..."
+	@cargo clippy --all-targets --all-features -- -D warnings
+	@echo "✅ Clippy OK"
+	@echo ""
+	@echo "📋 Step 3/4: Running unit tests..."
+	@cargo test --lib --quiet
+	@echo "✅ Unit tests OK"
+	@echo ""
+	@echo "📋 Step 4/4: Running integration tests..."
+	@cargo test --test integration_test --quiet
+	@cargo test --test flows_integration_test --quiet
+	@echo "✅ Integration tests OK"
+	@echo ""
+	@echo "🎉 All checks passed! Ready to commit."
+
+# Quick check (formatting + clippy only, no tests)
+check-quick:
+	@echo "⚡ Running quick checks (no tests)..."
+	@cargo fmt -- --check
+	@cargo clippy --all-targets --all-features -- -D warnings
+	@echo "✅ Quick checks passed!"
 
 fmt:
 	cargo fmt
@@ -95,12 +123,15 @@ fmt-check:
 	cargo fmt -- --check
 
 lint:
-	cargo clippy -- -D warnings
+	cargo clippy --all-targets --all-features -- -D warnings
 
+# Auto-fix all issues (format + clippy --fix)
 fix:
-	cargo fix --allow-dirty
-	cargo clippy --fix --allow-dirty
+	@echo "🔧 Auto-fixing all issues..."
+	cargo fix --allow-dirty --allow-staged
+	cargo clippy --fix --allow-dirty --allow-staged
 	cargo fmt
+	@echo "✅ Auto-fix complete!"
 
 # ────────────────────────────────────────────────────────────────────────────
 # Release

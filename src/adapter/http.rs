@@ -26,20 +26,14 @@ impl HttpAdapter {
     }
 
     /// Execute HTTP request based on manifest or generic http call
+    ///
+    /// OAuth tokens in headers (e.g., `Authorization: $oauth:github:default`) are
+    /// automatically expanded using the ExecutionContext's storage.
     async fn execute_request(
         &self,
-        mut inputs: HashMap<String, Value>,
+        inputs: HashMap<String, Value>,
+        ctx: &super::ExecutionContext,
     ) -> Result<HashMap<String, Value>> {
-        // Extract storage from inputs if present (injected by engine via context)
-        // This matches Go's pattern of injecting storage via context (engine.go line 1052)
-        let storage: Option<Arc<dyn crate::storage::Storage>> =
-            inputs.remove("__storage").and_then(|_v| {
-                // Storage is passed as a type-erased value
-                // For now, we'll skip this complex deserialization
-                // and handle OAuth differently
-                None
-            });
-
         // Build request based on manifest or inputs
         let (url, method, mut headers, body) = if let Some(manifest) = &self.tool_manifest {
             // If manifest has endpoint, use it; otherwise fall back to inputs
@@ -53,8 +47,9 @@ impl HttpAdapter {
             self.build_from_inputs(&inputs)?
         };
 
-        // Expand OAuth tokens in headers if storage is available
-        self.expand_oauth_in_headers(&mut headers, storage).await;
+        // Expand OAuth tokens in headers using storage from context
+        self.expand_oauth_in_headers(&mut headers, &ctx.storage)
+            .await;
 
         // Create request
         let method_str = method.clone(); // Keep for error messages
@@ -218,75 +213,83 @@ impl HttpAdapter {
 
     /// Expand OAuth tokens in headers at execution time
     ///
-    /// This async version performs actual OAuth token lookups from storage.
-    /// Matches Go's expandValue function (http_adapter.go lines 356-384).
+    /// Searches for headers with `$oauth:provider:integration` placeholders and replaces
+    /// them with actual OAuth access tokens from storage. For example:
+    ///
+    /// ```text
+    /// Authorization: $oauth:github:default
+    /// ```
+    ///
+    /// Becomes:
+    ///
+    /// ```text
+    /// Authorization: Bearer ghp_abc123...
+    /// ```
+    ///
+    /// This allows registry tool definitions to specify OAuth requirements without
+    /// hardcoding credentials.
     async fn expand_oauth_in_headers(
         &self,
         headers: &mut HashMap<String, String>,
-        storage: Option<Arc<dyn crate::storage::Storage>>,
+        storage: &Arc<dyn crate::storage::Storage>,
     ) {
-        // Clone headers to avoid borrowing issues
-        let headers_clone: Vec<(String, String)> = headers
+        let oauth_headers: Vec<_> = headers
             .iter()
+            .filter(|(_, v)| v.starts_with("$oauth:"))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        for (key, value) in headers_clone {
-            if value.starts_with("$oauth:") {
-                if let Some(ref store) = storage {
-                    // Parse $oauth:provider:integration
-                    let oauth_ref = value.trim_start_matches("$oauth:");
-                    let parts: Vec<&str> = oauth_ref.split(':').collect();
+        for (key, value) in oauth_headers {
+            if let Some(token) = self.expand_oauth_token(&value, storage).await {
+                headers.insert(key, format!("Bearer {}", token));
+            }
+        }
+    }
 
-                    if parts.len() == 2 {
-                        let provider = parts[0];
-                        let integration = parts[1];
+    /// Expand a single OAuth token reference ($oauth:provider:integration)
+    ///
+    /// Parses the OAuth reference, looks up the credential from storage, and returns
+    /// the access token. Warns about expired tokens but still returns them (the API
+    /// provider may still accept them or return a proper error).
+    async fn expand_oauth_token(
+        &self,
+        value: &str,
+        storage: &Arc<dyn crate::storage::Storage>,
+    ) -> Option<String> {
+        let oauth_ref = value.trim_start_matches("$oauth:");
+        let mut parts = oauth_ref.split(':');
+        let (provider, integration) = (parts.next()?, parts.next()?);
 
-                        // Get OAuth credential directly from storage
-                        // Note: We don't need OAuthClientManager here - just query storage
-                        match store.get_oauth_credential(provider, integration).await {
-                            Ok(Some(cred)) => {
-                                // Check if token is expired (same logic as OAuthClientManager::needs_refresh)
-                                let needs_refresh = if let Some(expires_at) = cred.expires_at {
-                                    let buffer = chrono::Duration::minutes(5);
-                                    chrono::Utc::now() + buffer >= expires_at
-                                } else {
-                                    false
-                                };
-
-                                if needs_refresh {
-                                    tracing::warn!(
-                                        "OAuth token for {}:{} is expired. Consider refreshing via the OAuth flow.",
-                                        provider,
-                                        integration
-                                    );
-                                }
-
-                                // Use the token even if expired (provider may still accept it)
-                                headers.insert(key, format!("Bearer {}", cred.access_token));
-                            }
-                            Ok(None) => {
-                                tracing::warn!(
-                                    "OAuth credential not found for {}:{}",
-                                    provider,
-                                    integration
-                                );
-                                // Keep original value if OAuth credential not found
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to get OAuth credential for {}:{} - {}",
-                                    provider,
-                                    integration,
-                                    e
-                                );
-                                // Keep original value if OAuth fetch fails
-                            }
-                        }
-                    }
-                } else {
-                    tracing::warn!("Storage not available for OAuth token expansion");
+        match storage.get_oauth_credential(provider, integration).await {
+            Ok(Some(cred)) => {
+                if cred
+                    .expires_at
+                    .is_some_and(|exp| chrono::Utc::now() + chrono::Duration::minutes(5) >= exp)
+                {
+                    tracing::warn!(
+                        "OAuth token for {}:{} is expired. Consider refreshing.",
+                        provider,
+                        integration
+                    );
                 }
+                Some(cred.access_token)
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    "OAuth credential not found for {}:{}",
+                    provider,
+                    integration
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to get OAuth credential for {}:{} - {}",
+                    provider,
+                    integration,
+                    e
+                );
+                None
             }
         }
     }
@@ -381,10 +384,14 @@ impl Adapter for HttpAdapter {
         &self.adapter_id
     }
 
-    async fn execute(&self, inputs: HashMap<String, Value>) -> Result<HashMap<String, Value>> {
+    async fn execute(
+        &self,
+        inputs: HashMap<String, Value>,
+        ctx: &super::ExecutionContext,
+    ) -> Result<HashMap<String, Value>> {
         // Enrich inputs with defaults from manifest if present
         let enriched_inputs = self.enrich_inputs_with_defaults(inputs);
-        self.execute_request(enriched_inputs).await
+        self.execute_request(enriched_inputs, ctx).await
     }
 
     fn manifest(&self) -> Option<ToolManifest> {

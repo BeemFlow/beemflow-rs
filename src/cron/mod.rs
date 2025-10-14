@@ -1,6 +1,6 @@
 //! Cron scheduling functionality for BeemFlow
 //!
-//! This module provides cron scheduling capabilities similar to the Go implementation,
+//! This module provides cron scheduling capabilities,
 //! allowing flows to be triggered based on cron expressions.
 
 use crate::Result;
@@ -88,9 +88,13 @@ impl CronManager {
 
     /// Check if a flow has a schedule.cron trigger
     fn has_schedule_cron_trigger(flow: &Flow) -> bool {
-        // For now, check if the flow has a cron field (simplified logic)
-        // In a complete implementation, this would check the trigger configuration
-        flow.cron.is_some()
+        // Check if the flow has a cron expression AND
+        // the trigger configuration includes "schedule.cron"
+        if let Some(ref trigger) = flow.on {
+            trigger.includes("schedule.cron") && flow.cron.is_some()
+        } else {
+            false
+        }
     }
 
     /// Check if a cron schedule should run within the given time window
@@ -167,39 +171,4 @@ pub fn shell_quote(s: &str) -> String {
     let escaped = s.replace('\'', "'\\''");
     // Wrap in single quotes
     format!("'{}'", escaped)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_shell_quote() {
-        assert_eq!(shell_quote("simple"), "'simple'");
-        assert_eq!(shell_quote("with'quote"), "'with'\\''quote'");
-        assert_eq!(shell_quote("multiple'quotes'here"), "'multiple'\\''quotes'\\''here'");
-    }
-
-    #[test]
-    fn test_has_schedule_cron_trigger() {
-        let flow = Flow {
-            cron: Some("0 * * * *".to_string()),
-            ..Default::default()
-        };
-
-        assert!(CronManager::has_schedule_cron_trigger(&flow));
-
-        let flow_no_cron = Flow {
-            cron: None,
-            ..Default::default()
-        };
-        assert!(!CronManager::has_schedule_cron_trigger(&flow_no_cron));
-    }
-
-    #[tokio::test]
-    async fn test_cron_manager_creation() {
-        let manager = CronManager::new("http://localhost:3000".to_string(), Some("secret".to_string()));
-        assert_eq!(manager.server_url, "http://localhost:3000");
-        assert_eq!(manager.cron_secret, Some("secret".to_string()));
-    }
 }

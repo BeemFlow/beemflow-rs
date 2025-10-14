@@ -3,17 +3,254 @@
 //! This module contains all the data structures that define BeemFlow workflows,
 //! runs, steps, and related types. These models provide complete workflow orchestration
 //! capabilities with strong type safety and comprehensive serialization support.
+//!
+//! It also includes domain-specific types with validation (FlowName, StepId, ResumeToken)
+//! to prevent common mistakes through type safety.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
+use std::ops::Deref;
 use uuid::Uuid;
 
+// ============================================================================
+// Domain Types - Validated newtypes for type safety
+// ============================================================================
+
+/// Flow identifier with validation
+///
+/// Ensures flow names are:
+/// - Non-empty
+/// - Valid identifiers (alphanumeric, underscore, hyphen)
+/// - Not just whitespace
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FlowName(String);
+
+impl FlowName {
+    /// Create a new FlowName with validation
+    pub fn new(name: impl Into<String>) -> crate::Result<Self> {
+        let name = name.into();
+
+        // Validate non-empty
+        if name.trim().is_empty() {
+            return Err(crate::BeemFlowError::validation(
+                "Flow name cannot be empty",
+            ));
+        }
+
+        // Validate characters (alphanumeric, underscore, hyphen, dot)
+        if !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
+        {
+            return Err(crate::BeemFlowError::validation(format!(
+                "Flow name '{}' contains invalid characters (only alphanumeric, _, -, . allowed)",
+                name
+            )));
+        }
+
+        Ok(Self(name))
+    }
+
+    /// Create without validation (use with caution)
+    /// Only for internal use when name is already known to be valid
+    #[inline]
+    pub(crate) fn unchecked(name: String) -> Self {
+        Self(name)
+    }
+
+    /// Get the raw string value
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume self and return the inner String
+    #[inline]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl Deref for FlowName {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl fmt::Display for FlowName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl AsRef<str> for FlowName {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for FlowName {
+    fn from(name: String) -> Self {
+        Self::unchecked(name)
+    }
+}
+
+/// Step identifier with validation
+///
+/// Ensures step IDs are:
+/// - Non-empty
+/// - Valid identifiers
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct StepId(String);
+
+impl StepId {
+    /// Create a new StepId with validation
+    pub fn new(id: impl Into<String>) -> crate::Result<Self> {
+        let id = id.into();
+
+        // Validate non-empty
+        if id.trim().is_empty() {
+            return Err(crate::BeemFlowError::validation("Step ID cannot be empty"));
+        }
+
+        // Validate characters (alphanumeric, underscore, hyphen)
+        if !id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(crate::BeemFlowError::validation(format!(
+                "Step ID '{}' contains invalid characters (only alphanumeric, _, - allowed)",
+                id
+            )));
+        }
+
+        Ok(Self(id))
+    }
+
+    /// Create without validation (use with caution)
+    #[inline]
+    pub(crate) fn unchecked(id: String) -> Self {
+        Self(id)
+    }
+
+    /// Get the raw string value
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume self and return the inner String
+    #[inline]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl Deref for StepId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl fmt::Display for StepId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl AsRef<str> for StepId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for StepId {
+    fn from(id: String) -> Self {
+        Self::unchecked(id)
+    }
+}
+
+/// Resume token for paused runs (awaiting events)
+///
+/// Opaque identifier for resuming paused workflow runs.
+/// Validates that the token is a valid UUID v4.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ResumeToken(String);
+
+impl ResumeToken {
+    /// Create a new resume token (generates a UUID v4)
+    pub fn generate() -> Self {
+        Self(Uuid::new_v4().to_string())
+    }
+
+    /// Create from an existing string with validation
+    pub fn new(token: impl Into<String>) -> crate::Result<Self> {
+        let token = token.into();
+
+        // Validate it's a valid UUID
+        Uuid::parse_str(&token)
+            .map_err(|_| crate::BeemFlowError::validation("Resume token must be a valid UUID"))?;
+
+        Ok(Self(token))
+    }
+
+    /// Get the raw string value
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume self and return the inner String
+    #[inline]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl Deref for ResumeToken {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl fmt::Display for ResumeToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl AsRef<str> for ResumeToken {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Type alias for Run IDs to improve code clarity
+///
+/// While this is just a Uuid, using RunId makes the intent clearer
+/// and makes it easier to change the implementation later if needed.
+pub type RunId = Uuid;
+
+// ============================================================================
+// Workflow Models
+// ============================================================================
+
 /// A complete workflow definition
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Flow {
     /// Unique workflow identifier (REQUIRED)
-    pub name: String,
+    pub name: FlowName,
 
     /// Human-readable description (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,6 +284,22 @@ pub struct Flow {
     pub mcp_servers: Option<HashMap<String, McpServerConfig>>,
 }
 
+impl Default for Flow {
+    fn default() -> Self {
+        Self {
+            name: FlowName::unchecked(String::new()),
+            description: None,
+            version: None,
+            on: None,
+            cron: None,
+            vars: None,
+            steps: Vec::new(),
+            catch: None,
+            mcp_servers: None,
+        }
+    }
+}
+
 /// Trigger type for workflow execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -67,24 +320,33 @@ impl Trigger {
         match self {
             Trigger::Single(t) => t == trigger_type,
             Trigger::Multiple(triggers) => triggers.iter().any(|t| t == trigger_type),
-            Trigger::Complex(_) => {
-                // For complex triggers, we'd need to inspect the structure
-                // For now, just return false
-                false
-            }
-            Trigger::Raw(_) => {
-                // For raw values, try to match against string or array
-                false
+            Trigger::Complex(values) => values.iter().any(|v| Self::value_matches(v, trigger_type)),
+            Trigger::Raw(value) => {
+                if let Some(arr) = value.as_array() {
+                    arr.iter().any(|v| Self::value_matches(v, trigger_type))
+                } else {
+                    Self::value_matches(value, trigger_type)
+                }
             }
         }
+    }
+
+    /// Check if a JSON value matches a trigger type (string or {event: "..."})
+    fn value_matches(value: &serde_json::Value, trigger_type: &str) -> bool {
+        value.as_str().is_some_and(|s| s == trigger_type)
+            || value
+                .as_object()
+                .and_then(|obj| obj.get("event"))
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e == trigger_type)
     }
 }
 
 /// A single workflow step
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Step {
     /// Unique step identifier (REQUIRED)
-    pub id: String,
+    pub id: StepId,
 
     /// Tool to execute
     #[serde(skip_serializing_if = "Option::is_none", rename = "use")]
@@ -133,6 +395,26 @@ pub struct Step {
     /// Time delay configuration
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait: Option<WaitSpec>,
+}
+
+impl Default for Step {
+    fn default() -> Self {
+        Self {
+            id: StepId::unchecked(String::new()),
+            use_: None,
+            with: None,
+            depends_on: None,
+            parallel: None,
+            if_: None,
+            foreach: None,
+            as_: None,
+            do_: None,
+            steps: None,
+            retry: None,
+            await_event: None,
+            wait: None,
+        }
+    }
 }
 
 /// Retry configuration for a step
@@ -203,10 +485,10 @@ pub struct McpServerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
     /// Unique run identifier
-    pub id: Uuid,
+    pub id: RunId,
 
     /// Flow name
-    pub flow_name: String,
+    pub flow_name: FlowName,
 
     /// Event data that triggered this run
     pub event: HashMap<String, serde_json::Value>,
@@ -256,13 +538,13 @@ pub enum RunStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepRun {
     /// Unique step run identifier
-    pub id: Uuid,
+    pub id: RunId,
 
     /// Parent run identifier
-    pub run_id: Uuid,
+    pub run_id: RunId,
 
     /// Step name/ID
-    pub step_name: String,
+    pub step_name: StepId,
 
     /// Step execution status
     pub status: StepStatus,
@@ -509,4 +791,154 @@ pub struct OAuthToken {
 
     /// Refresh token expiration duration
     pub refresh_expires_in: Option<std::time::Duration>,
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================================================
+    // Model Tests
+    // ========================================================================
+
+    #[test]
+    fn test_flow_deserialization() {
+        let yaml = r#"
+name: hello
+description: Hello world flow
+on: cli.manual
+steps:
+  - id: greet
+    use: core.echo
+    with:
+      text: "Hello, world!"
+"#;
+
+        let flow: Flow = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(flow.name.as_str(), "hello");
+        assert_eq!(flow.steps.len(), 1);
+        assert_eq!(flow.steps[0].id.as_str(), "greet");
+    }
+
+    #[test]
+    fn test_trigger_includes() {
+        let single = Trigger::Single("cli.manual".to_string());
+        assert!(single.includes("cli.manual"));
+        assert!(!single.includes("http.request"));
+
+        let multiple =
+            Trigger::Multiple(vec!["cli.manual".to_string(), "schedule.cron".to_string()]);
+        assert!(multiple.includes("cli.manual"));
+        assert!(multiple.includes("schedule.cron"));
+        assert!(!multiple.includes("http.request"));
+    }
+
+    #[test]
+    fn test_oauth_credential_expired() {
+        let mut cred = OAuthCredential {
+            id: "test".to_string(),
+            provider: "google".to_string(),
+            integration: "sheets".to_string(),
+            access_token: "token".to_string(),
+            refresh_token: None,
+            expires_at: Some(Utc::now() - chrono::Duration::hours(1)),
+            scope: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        assert!(cred.is_expired());
+
+        cred.expires_at = Some(Utc::now() + chrono::Duration::hours(1));
+        assert!(!cred.is_expired());
+    }
+
+    // ========================================================================
+    // Domain Type Tests (formerly domain_test.rs)
+    // ========================================================================
+
+    #[test]
+    fn test_flow_name_valid() {
+        assert!(FlowName::new("my_flow").is_ok());
+        assert!(FlowName::new("my-flow").is_ok());
+        assert!(FlowName::new("my_flow_123").is_ok());
+        assert!(FlowName::new("MyFlow").is_ok());
+        assert!(FlowName::new("flow.name").is_ok());
+    }
+
+    #[test]
+    fn test_flow_name_invalid() {
+        assert!(FlowName::new("").is_err());
+        assert!(FlowName::new("   ").is_err());
+        assert!(FlowName::new("my flow").is_err()); // spaces not allowed
+        assert!(FlowName::new("my/flow").is_err()); // slashes not allowed
+    }
+
+    #[test]
+    fn test_step_id_valid() {
+        assert!(StepId::new("step1").is_ok());
+        assert!(StepId::new("my_step").is_ok());
+        assert!(StepId::new("my-step").is_ok());
+        assert!(StepId::new("step_123").is_ok());
+    }
+
+    #[test]
+    fn test_step_id_invalid() {
+        assert!(StepId::new("").is_err());
+        assert!(StepId::new("   ").is_err());
+        assert!(StepId::new("my step").is_err()); // spaces not allowed
+        assert!(StepId::new("step.name").is_err()); // dots not allowed in step IDs
+    }
+
+    #[test]
+    fn test_resume_token_generate() {
+        let token1 = ResumeToken::generate();
+        let token2 = ResumeToken::generate();
+        assert_ne!(token1, token2); // Should be unique
+    }
+
+    #[test]
+    fn test_resume_token_from_uuid() {
+        let uuid = Uuid::new_v4();
+        let token = ResumeToken::new(uuid.to_string());
+        assert!(token.is_ok());
+    }
+
+    #[test]
+    fn test_resume_token_invalid() {
+        assert!(ResumeToken::new("not-a-uuid").is_err());
+        assert!(ResumeToken::new("").is_err());
+    }
+
+    #[test]
+    fn test_deref() {
+        let flow = FlowName::new("test_flow").unwrap();
+        assert_eq!(flow.len(), 9); // Deref to str
+
+        let step = StepId::new("step1").unwrap();
+        assert_eq!(step.as_str(), "step1");
+    }
+
+    #[test]
+    fn test_display() {
+        let flow = FlowName::new("test_flow").unwrap();
+        assert_eq!(format!("{}", flow), "test_flow");
+
+        let step = StepId::new("step1").unwrap();
+        assert_eq!(format!("{}", step), "step1");
+    }
+
+    #[test]
+    fn test_serialization() {
+        let flow = FlowName::new("test_flow").unwrap();
+        let json = serde_json::to_string(&flow).unwrap();
+        assert_eq!(json, "\"test_flow\"");
+
+        let deserialized: FlowName = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, flow);
+    }
 }

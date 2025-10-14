@@ -1,7 +1,7 @@
 
 use super::*;
 use crate::registry::RegistryManager;
-use crate::storage::MemoryStorage;
+use crate::storage::{MemoryStorage, OAuthStorage};
 
 fn create_test_credential() -> OAuthCredential {
     OAuthCredential {
@@ -25,7 +25,8 @@ async fn test_get_token_no_credential() {
         storage,
         registry_manager,
         "http://localhost:3000/callback".to_string(),
-    );
+    )
+    .expect("Failed to create OAuth client manager");
 
     let result = client.get_token("google", "sheets").await;
     assert!(result.is_err());
@@ -43,7 +44,8 @@ async fn test_get_token_valid() {
         storage,
         registry_manager,
         "http://localhost:3000/callback".to_string(),
-    );
+    )
+    .expect("Failed to create OAuth client manager");
     let token = client.get_token("google", "sheets").await.unwrap();
 
     assert_eq!(token, "test-token");

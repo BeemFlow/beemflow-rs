@@ -225,7 +225,7 @@ fn parse_webhook_events(config: &WebhookConfig, payload: &Value) -> Result<Vec<P
 }
 
 /// Check if payload matches event match conditions
-fn matches_event(payload: &Value, match_conditions: &HashMap<String, Value>) -> bool {
+pub(crate) fn matches_event(payload: &Value, match_conditions: &HashMap<String, Value>) -> bool {
     for (path, expected) in match_conditions {
         let actual = extract_json_path(payload, path);
         if actual.as_ref() != Some(expected) {
@@ -236,7 +236,7 @@ fn matches_event(payload: &Value, match_conditions: &HashMap<String, Value>) -> 
 }
 
 /// Extract value from JSON using dot notation path
-fn extract_json_path(data: &Value, path: &str) -> Option<Value> {
+pub(crate) fn extract_json_path(data: &Value, path: &str) -> Option<Value> {
     let parts: Vec<&str> = path.split('.').collect();
     let mut current = data;
 
@@ -248,70 +248,11 @@ fn extract_json_path(data: &Value, path: &str) -> Option<Value> {
 }
 
 /// Expand environment variable references ($env:VAR_NAME)
-fn expand_env_value(value: &str) -> String {
+pub(crate) fn expand_env_value(value: &str) -> String {
     if value.starts_with("$env:") {
         let var_name = value.trim_start_matches("$env:");
         std::env::var(var_name).unwrap_or_default()
     } else {
         value.to_string()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn test_extract_json_path() {
-        let data = json!({
-            "user": {
-                "name": "Alice",
-                "email": "alice@example.com"
-            },
-            "count": 42
-        });
-
-        assert_eq!(extract_json_path(&data, "user.name"), Some(json!("Alice")));
-        assert_eq!(
-            extract_json_path(&data, "user.email"),
-            Some(json!("alice@example.com"))
-        );
-        assert_eq!(extract_json_path(&data, "count"), Some(json!(42)));
-        assert_eq!(extract_json_path(&data, "nonexistent"), None);
-    }
-
-    #[test]
-    fn test_matches_event() {
-        let payload = json!({
-            "type": "message.created",
-            "user_id": "123"
-        });
-
-        let mut conditions = HashMap::new();
-        conditions.insert("type".to_string(), json!("message.created"));
-
-        assert!(matches_event(&payload, &conditions));
-
-        conditions.insert("user_id".to_string(), json!("123"));
-        assert!(matches_event(&payload, &conditions));
-
-        conditions.insert("user_id".to_string(), json!("456"));
-        assert!(!matches_event(&payload, &conditions));
-    }
-
-    #[test]
-    fn test_expand_env_value() {
-        unsafe {
-            std::env::set_var("TEST_VAR", "test_value");
-        }
-
-        assert_eq!(expand_env_value("$env:TEST_VAR"), "test_value");
-        assert_eq!(expand_env_value("literal_value"), "literal_value");
-        assert_eq!(expand_env_value("$env:NONEXISTENT"), "");
-
-        unsafe {
-            std::env::remove_var("TEST_VAR");
-        }
     }
 }

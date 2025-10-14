@@ -12,7 +12,7 @@ fn create_step(id: &str, use_tool: &str, text: &str) -> Step {
     with.insert("text".to_string(), json!(text));
 
     Step {
-        id: id.to_string(),
+        id: id.to_string().into(),
         use_: Some(use_tool.to_string()),
         with: Some(with),
         ..Default::default()
@@ -21,10 +21,10 @@ fn create_step(id: &str, use_tool: &str, text: &str) -> Step {
 
 #[tokio::test]
 async fn test_missing_adapter() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![create_step("step1", "nonexistent.adapter", "test")],
         ..Default::default()
     };
@@ -50,15 +50,15 @@ async fn test_missing_adapter() {
 
 #[tokio::test]
 async fn test_invalid_step_configuration() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let mut with = HashMap::new();
     with.insert("wrong_field".to_string(), json!("value"));
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "step1".to_string(),
+            id: "step1".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some(with),
             ..Default::default()
@@ -76,15 +76,15 @@ async fn test_invalid_step_configuration() {
 
 #[tokio::test]
 async fn test_template_rendering_error() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let mut with = HashMap::new();
     with.insert("text".to_string(), json!("{{ undefined_variable }}"));
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "step1".to_string(),
+            id: "step1".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some(with),
             ..Default::default()
@@ -99,7 +99,7 @@ async fn test_template_rendering_error() {
 
 #[tokio::test]
 async fn test_circular_dependency() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let mut with1 = HashMap::new();
     with1.insert("text".to_string(), json!("{{ steps.step2.output }}"));
@@ -108,16 +108,16 @@ async fn test_circular_dependency() {
     with2.insert("text".to_string(), json!("{{ steps.step1.output }}"));
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![
             Step {
-                id: "step1".to_string(),
+                id: "step1".to_string().into(),
                 use_: Some("core.echo".to_string()),
                 with: Some(with1),
                 ..Default::default()
             },
             Step {
-                id: "step2".to_string(),
+                id: "step2".to_string().into(),
                 use_: Some("core.echo".to_string()),
                 with: Some(with2),
                 ..Default::default()
@@ -133,19 +133,19 @@ async fn test_circular_dependency() {
 
 #[tokio::test]
 async fn test_error_in_catch_block() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "step1".to_string(),
+            id: "step1".to_string().into(),
             use_: Some("nonexistent.tool".to_string()),
             with: Some(HashMap::new()),
             ..Default::default()
         }],
         // Flow-level catch
         catch: Some(vec![Step {
-            id: "catch1".to_string(),
+            id: "catch1".to_string().into(),
             use_: Some("also.nonexistent".to_string()),
             with: Some(HashMap::new()),
             ..Default::default()
@@ -160,12 +160,12 @@ async fn test_error_in_catch_block() {
 
 #[tokio::test]
 async fn test_foreach_with_invalid_expression() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "step1".to_string(),
+            id: "step1".to_string().into(),
             foreach: Some("not_an_array".to_string()),
             do_: Some(vec![create_step("loop_step", "core.echo", "{{ item }}")]),
             ..Default::default()
@@ -180,12 +180,12 @@ async fn test_foreach_with_invalid_expression() {
 
 #[tokio::test]
 async fn test_retry_exhaustion() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "step1".to_string(),
+            id: "step1".to_string().into(),
             use_: Some("nonexistent.tool".to_string()),
             with: Some(HashMap::new()),
             retry: Some(RetrySpec {
@@ -204,16 +204,16 @@ async fn test_retry_exhaustion() {
 
 #[tokio::test]
 async fn test_parallel_block_partial_failure() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "parallel1".to_string(),
+            id: "parallel1".to_string().into(),
             steps: Some(vec![
                 create_step("p1", "core.echo", "success"),
                 Step {
-                    id: "p2".to_string(),
+                    id: "p2".to_string().into(),
                     use_: Some("nonexistent.tool".to_string()),
                     with: Some(HashMap::new()),
                     ..Default::default()
@@ -232,15 +232,15 @@ async fn test_parallel_block_partial_failure() {
 
 #[tokio::test]
 async fn test_empty_step_id() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let mut with = HashMap::new();
     with.insert("text".to_string(), json!("test"));
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "".to_string(), // Empty ID
+            id: "".to_string().into(), // Empty ID
             use_: Some("core.echo".to_string()),
             with: Some(with),
             ..Default::default()
@@ -255,10 +255,10 @@ async fn test_empty_step_id() {
 
 #[tokio::test]
 async fn test_duplicate_step_ids() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![
             create_step("duplicate", "core.echo", "first"),
             create_step("duplicate", "core.echo", "second"),
@@ -277,12 +277,12 @@ async fn test_duplicate_step_ids() {
 
 #[tokio::test]
 async fn test_condition_evaluation() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "step1".to_string(),
+            id: "step1".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some({
                 let mut map = HashMap::new();
@@ -302,12 +302,12 @@ async fn test_condition_evaluation() {
 
 #[tokio::test]
 async fn test_step_without_use_field() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "step1".to_string(),
+            id: "step1".to_string().into(),
             use_: None, // No use field
             with: Some({
                 let mut map = HashMap::new();
@@ -326,14 +326,14 @@ async fn test_step_without_use_field() {
 
 #[tokio::test]
 async fn test_deeply_nested_steps() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "outer".to_string(),
+            id: "outer".to_string().into(),
             steps: Some(vec![Step {
-                id: "nested1".to_string(),
+                id: "nested1".to_string().into(),
                 steps: Some(vec![create_step("deep1", "core.echo", "deep")]),
                 parallel: Some(true),
                 ..Default::default()
@@ -351,7 +351,7 @@ async fn test_deeply_nested_steps() {
 
 #[tokio::test]
 async fn test_large_output_handling() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     // Create a very large string (100KB, not 1MB to keep tests fast)
     let large_text = "A".repeat(100 * 1024);
@@ -360,9 +360,9 @@ async fn test_large_output_handling() {
     with.insert("text".to_string(), json!(large_text));
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "step1".to_string(),
+            id: "step1".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some(with),
             ..Default::default()
@@ -377,7 +377,7 @@ async fn test_large_output_handling() {
 
 #[tokio::test]
 async fn test_null_values_in_context() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let mut event = HashMap::new();
     event.insert("null_value".to_string(), json!(null));
@@ -386,9 +386,9 @@ async fn test_null_values_in_context() {
     with.insert("text".to_string(), json!("{{ event.null_value }}"));
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "step1".to_string(),
+            id: "step1".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some(with),
             ..Default::default()
@@ -403,12 +403,12 @@ async fn test_null_values_in_context() {
 
 #[tokio::test]
 async fn test_error_recovery_with_catch() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "step1".to_string(),
+            id: "step1".to_string().into(),
             use_: Some("nonexistent.tool".to_string()),
             with: Some(HashMap::new()),
             ..Default::default()
@@ -428,19 +428,19 @@ async fn test_error_recovery_with_catch() {
 
 #[tokio::test]
 async fn test_multiple_errors_sequentially() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![
             Step {
-                id: "fail1".to_string(),
+                id: "fail1".to_string().into(),
                 use_: Some("nonexistent1".to_string()),
                 with: Some(HashMap::new()),
                 ..Default::default()
             },
             Step {
-                id: "fail2".to_string(),
+                id: "fail2".to_string().into(),
                 use_: Some("nonexistent2".to_string()),
                 with: Some(HashMap::new()),
                 ..Default::default()
@@ -456,19 +456,19 @@ async fn test_multiple_errors_sequentially() {
 
 #[tokio::test]
 async fn test_step_depends_on_failed_step() {
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
 
     let flow = Flow {
-        name: "test-flow".to_string(),
+        name: "test-flow".to_string().into(),
         steps: vec![
             Step {
-                id: "fail_step".to_string(),
+                id: "fail_step".to_string().into(),
                 use_: Some("nonexistent.tool".to_string()),
                 with: Some(HashMap::new()),
                 ..Default::default()
             },
             Step {
-                id: "dependent".to_string(),
+                id: "dependent".to_string().into(),
                 use_: Some("core.echo".to_string()),
                 with: Some({
                     let mut map = HashMap::new();

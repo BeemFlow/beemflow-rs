@@ -14,7 +14,7 @@ with:
   text: "Hello, world!"
 "#;
     
-    let flow = parse_string(yaml).unwrap();
+    let flow = parse_string(yaml, None).unwrap();
     assert_eq!(flow.name, "hello");
     assert_eq!(flow.steps.len(), 1);
     assert_eq!(flow.steps[0].id, "greet");
@@ -36,7 +36,7 @@ with:
   url: "{{ vars.API_URL }}"
 "#;
     
-    let flow = parse_string(yaml).unwrap();
+    let flow = parse_string(yaml, None).unwrap();
     assert_eq!(flow.name, "test_vars");
     assert!(flow.vars.is_some());
     let vars = flow.vars.unwrap();
@@ -62,7 +62,7 @@ steps:
       text: "Task 2"
 "#;
     
-    let flow = parse_string(yaml).unwrap();
+    let flow = parse_string(yaml, None).unwrap();
     assert_eq!(flow.steps.len(), 1);
     assert_eq!(flow.steps[0].parallel, Some(true));
     assert!(flow.steps[0].steps.is_some());
@@ -115,7 +115,7 @@ with:
     write!(temp_file, "{}", yaml).unwrap();
     
     // Load and validate
-    let flow = load_flow(temp_file.path(), HashMap::new()).unwrap();
+    let flow = load_flow(temp_file.path(), HashMap::new(, None)).unwrap();
     assert_eq!(flow.name, "test_load");
     assert_eq!(flow.steps.len(), 1);
 }
@@ -144,7 +144,7 @@ with:
     vars.insert("name".to_string(), json!("templated_flow"));
     vars.insert("message".to_string(), json!("Hello from template"));
     
-    let flow = load_flow(temp_file.path(), vars).unwrap();
+    let flow = load_flow(temp_file.path(), vars, None).unwrap();
     assert_eq!(flow.name, "templated_flow");
 }
 
@@ -166,7 +166,7 @@ do:
       text: "Processing {{ item }}"
 "#;
     
-    let flow = parse_string(yaml).unwrap();
+    let flow = parse_string(yaml, None).unwrap();
     assert_eq!(flow.steps.len(), 1);
     assert!(flow.steps[0].foreach.is_some());
     assert!(flow.steps[0].as_.is_some());
@@ -186,7 +186,7 @@ with:
   text: "Enabled"
 "#;
     
-    let flow = parse_string(yaml).unwrap();
+    let flow = parse_string(yaml, None).unwrap();
     assert_eq!(flow.steps.len(), 1);
     assert!(flow.steps[0].if_.is_some());
 }
@@ -208,7 +208,7 @@ with:
   text: "Error handled"
 "#;
     
-    let flow = parse_string(yaml).unwrap();
+    let flow = parse_string(yaml, None).unwrap();
     assert!(flow.catch.is_some());
     assert_eq!(flow.catch.as_ref().unwrap().len(), 1);
 }
@@ -228,7 +228,7 @@ with:
   url: "https://api.example.com"
 "#;
     
-    let flow = parse_string(yaml).unwrap();
+    let flow = parse_string(yaml, None).unwrap();
     assert!(flow.steps[0].retry.is_some());
     let retry = flow.steps[0].retry.as_ref().unwrap();
     assert_eq!(retry.attempts, 3);
@@ -249,7 +249,7 @@ await_event:
   timeout: "1h"
 "#;
     
-    let flow = parse_string(yaml).unwrap();
+    let flow = parse_string(yaml, None).unwrap();
     assert!(flow.steps[0].await_event.is_some());
     let await_spec = flow.steps[0].await_event.as_ref().unwrap();
     assert_eq!(await_spec.source, "slack");
@@ -267,7 +267,7 @@ wait:
   seconds: 30
 "#;
     
-    let flow = parse_string(yaml).unwrap();
+    let flow = parse_string(yaml, None).unwrap();
     assert!(flow.steps[0].wait.is_some());
     let wait_spec = flow.steps[0].wait.as_ref().unwrap();
     assert_eq!(wait_spec.seconds, Some(30));
@@ -290,7 +290,7 @@ with:
   text: "Second"
 "#;
     
-    let flow = parse_string(yaml).unwrap();
+    let flow = parse_string(yaml, None).unwrap();
     assert_eq!(flow.steps.len(), 2);
     assert!(flow.steps[1].depends_on.is_some());
     assert_eq!(flow.steps[1].depends_on.as_ref().unwrap(), &vec!["step1"]);

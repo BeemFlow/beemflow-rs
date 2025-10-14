@@ -1,6 +1,13 @@
 //! Storage backends for BeemFlow
 //!
 //! Provides multiple storage backends with a unified trait interface.
+//!
+//! The storage layer is split into focused traits following Interface Segregation Principle:
+//! - `RunStorage`: Run and step execution tracking
+//! - `FlowStorage`: Flow definition management and versioning
+//! - `OAuthStorage`: OAuth credentials, providers, clients, and tokens
+//! - `StateStorage`: Paused runs and wait tokens for durable execution
+//! - `Storage`: Composition trait implementing all of the above
 
 pub mod memory;
 pub mod postgres;
@@ -14,9 +21,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Storage trait for persisting flows, runs, and state
+/// Run storage for tracking workflow executions
 #[async_trait]
-pub trait Storage: Send + Sync {
+pub trait RunStorage: Send + Sync {
     // Run methods
     /// Save a run
     async fn save_run(&self, run: &Run) -> Result<()>;
@@ -40,7 +47,11 @@ pub trait Storage: Send + Sync {
 
     /// Get steps for a run
     async fn get_steps(&self, run_id: Uuid) -> Result<Vec<StepRun>>;
+}
 
+/// State storage for durable execution (paused runs, wait tokens)
+#[async_trait]
+pub trait StateStorage: Send + Sync {
     // Wait/timeout methods
     /// Register a wait token with optional wake time
     async fn register_wait(&self, token: Uuid, wake_at: Option<i64>) -> Result<()>;
@@ -61,7 +72,11 @@ pub trait Storage: Send + Sync {
     /// Atomically fetch and delete a paused run
     /// Returns None if not found, preventing double-resume
     async fn fetch_and_delete_paused_run(&self, token: &str) -> Result<Option<serde_json::Value>>;
+}
 
+/// Flow storage for workflow definitions and versioning
+#[async_trait]
+pub trait FlowStorage: Send + Sync {
     // Flow management methods (for operations layer)
     /// Save a flow definition
     async fn save_flow(&self, name: &str, content: &str, version: Option<&str>) -> Result<()>;
@@ -99,7 +114,11 @@ pub trait Storage: Send + Sync {
 
     /// List all versions of a flow
     async fn list_flow_versions(&self, flow_name: &str) -> Result<Vec<FlowSnapshot>>;
+}
 
+/// OAuth storage for credentials, providers, clients, and tokens
+#[async_trait]
+pub trait OAuthStorage: Send + Sync {
     // OAuth credential methods
     /// Save OAuth credential
     async fn save_oauth_credential(&self, credential: &OAuthCredential) -> Result<()>;
@@ -173,6 +192,15 @@ pub trait Storage: Send + Sync {
     /// Delete OAuth token by refresh token
     async fn delete_oauth_token_by_refresh(&self, refresh: &str) -> Result<()>;
 }
+
+/// Complete storage trait combining all focused storage traits
+///
+/// This trait provides the full storage interface by composing all focused traits.
+/// Implementations can implement each focused trait separately for better modularity.
+pub trait Storage: RunStorage + StateStorage + FlowStorage + OAuthStorage {}
+
+/// Blanket implementation: any type implementing all focused traits also implements Storage
+impl<T> Storage for T where T: RunStorage + StateStorage + FlowStorage + OAuthStorage {}
 
 /// Flow snapshot represents a deployed flow version
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

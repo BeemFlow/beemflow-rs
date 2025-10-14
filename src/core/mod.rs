@@ -141,10 +141,7 @@ impl<Op: Operation + 'static> OperationExecutor for OperationWrapper<Op> {
 
 // Helper functions for common error patterns
 fn not_found(entity: &str, name: &str) -> BeemFlowError {
-    BeemFlowError::Storage(crate::error::StorageError::NotFound(format!(
-        "{} not found: {}",
-        entity, name
-    )))
+    BeemFlowError::not_found(entity, name)
 }
 
 fn type_mismatch(name: &str, expected_type: &str, actual_type: &str) -> BeemFlowError {
@@ -185,13 +182,13 @@ async fn load_flow_from_storage(
 ) -> Result<crate::model::Flow> {
     use crate::dsl::{parse_file, parse_string};
     match (file, name) {
-        (Some(f), _) => parse_file(f),
+        (Some(f), _) => parse_file(f, None),
         (None, Some(n)) => {
             let content = storage
                 .get_flow(n)
                 .await?
                 .ok_or_else(|| not_found("Flow", n))?;
-            parse_string(&content)
+            parse_string(&content, None)
         }
         _ => Err(BeemFlowError::validation(
             "Either name or file must be provided",
@@ -227,6 +224,9 @@ pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
     // Load tools and MCP servers from default registry (synchronously from embedded JSON)
     Engine::load_default_registry_tools(&adapters, &mcp_adapter);
 
+    // Get limits from config
+    let limits = config.get_limits();
+
     // Create engine with shared storage (NOT Engine::default() which uses MemoryStorage)
     let engine = Arc::new(Engine::new(
         adapters,
@@ -234,6 +234,7 @@ pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
         templater,
         event_bus.clone(),
         storage.clone(),
+        limits.max_concurrent_tasks,
     ));
 
     // Create registry manager with standard sources

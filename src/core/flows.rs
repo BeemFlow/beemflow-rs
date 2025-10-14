@@ -186,7 +186,7 @@ pub mod flows {
                 .ok_or_else(|| not_found("Flow", &input.name))?;
 
             // Parse to get version
-            let flow = parse_string(&content)?;
+            let flow = parse_string(&content, None)?;
 
             Ok(GetOutput {
                 name: input.name,
@@ -215,11 +215,11 @@ pub mod flows {
 
         async fn execute(&self, input: Self::Input) -> Result<Self::Output> {
             // Parse and validate the flow
-            let flow = parse_string(&input.content)?;
+            let flow = parse_string(&input.content, None)?;
             Validator::validate(&flow)?;
 
             // Determine flow name
-            let name = input.name.unwrap_or_else(|| flow.name.clone());
+            let name = input.name.unwrap_or_else(|| flow.name.to_string());
             if name.is_empty() {
                 return Err(BeemFlowError::validation("Flow must have a name"));
             }
@@ -298,7 +298,7 @@ pub mod flows {
                 .ok_or_else(|| not_found("Flow", &input.name))?;
 
             // Parse to get version
-            let flow = parse_string(&content)?;
+            let flow = parse_string(&content, None)?;
             let version = flow.version.ok_or_else(|| {
                 BeemFlowError::validation("Flow must have a version field to deploy")
             })?;
@@ -484,7 +484,7 @@ pub mod flows {
         type Output = Value;
 
         async fn execute(&self, input: Self::Input) -> Result<Self::Output> {
-            let flow = parse_file(&input.file)?;
+            let flow = parse_file(&input.file, None)?;
             Validator::validate(&flow)?;
 
             Ok(serde_json::json!({

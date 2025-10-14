@@ -28,10 +28,13 @@ use std::sync::Arc;
 use tower::ServiceBuilder;
 use tower_http::{
     LatencyUnit,
-    cors::{Any, CorsLayer},
+    cors::CorsLayer,
     services::ServeDir,
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
+
+/// Maximum request body size (10MB) - prevents memory exhaustion attacks
+const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -54,37 +57,59 @@ impl IntoResponse for AppError {
                 (StatusCode::BAD_REQUEST, "validation_error", msg.clone())
             }
             BeemFlowError::Storage(e) => match e {
-                crate::error::StorageError::NotFound(msg) => {
-                    (StatusCode::NOT_FOUND, "not_found", msg.clone())
-                }
-                _ => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "storage_error",
-                    e.to_string(),
+                crate::error::StorageError::NotFound { entity, id } => (
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    format!("{} not found: {}", entity, id),
                 ),
+                _ => {
+                    // Log full error details internally
+                    tracing::error!("Storage error: {:?}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "storage_error",
+                        "An internal storage error occurred".to_string(),
+                    )
+                }
             },
-            BeemFlowError::StepExecution { step_id, message } => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "execution_error",
-                format!("Step {} failed: {}", step_id, message),
-            ),
+            BeemFlowError::StepExecution { step_id, message } => {
+                // Log full error details internally
+                tracing::error!("Step execution failed: {} - {}", step_id, message);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "execution_error",
+                    "A step execution error occurred".to_string(),
+                )
+            }
             BeemFlowError::OAuth(msg) => (StatusCode::UNAUTHORIZED, "auth_error", msg.clone()),
             BeemFlowError::Adapter(msg) => (StatusCode::BAD_GATEWAY, "adapter_error", msg.clone()),
             BeemFlowError::Mcp(msg) => (StatusCode::BAD_GATEWAY, "mcp_error", msg.clone()),
-            BeemFlowError::Network(e) => (StatusCode::BAD_GATEWAY, "network_error", e.to_string()),
-            _ => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                self.0.to_string(),
-            ),
+            BeemFlowError::Network(e) => {
+                // Log full error details internally
+                tracing::error!("Network error: {:?}", e);
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "network_error",
+                    "A network error occurred".to_string(),
+                )
+            }
+            _ => {
+                // Log full error details internally
+                tracing::error!("Internal error: {:?}", self.0);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "An internal error occurred".to_string(),
+                )
+            }
         };
 
-        // Log the error
-        tracing::error!(
+        // Log the sanitized error response
+        tracing::debug!(
             error_type = error_type,
             status = %status,
             message = %message,
-            "HTTP request error"
+            "HTTP request error response"
         );
 
         let body = json!({
@@ -109,6 +134,58 @@ where
 }
 
 // ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/// Encode OAuth state with embedded session ID for stateless callback handling
+///
+/// Format: `{csrf_token}:{session_id}`
+///
+/// This allows the OAuth callback to identify the session without cookies or
+/// query parameters, making the flow work across web, mobile, and CLI contexts.
+fn encode_oauth_state(csrf_token: &str, session_id: &str) -> String {
+    format!("{}:{}", csrf_token, session_id)
+}
+
+/// Decode OAuth state to extract CSRF token and session ID
+///
+/// Returns `(csrf_token, session_id)` if the state has the expected format,
+/// otherwise returns an authentication error.
+fn decode_oauth_state(state: &str) -> Result<(String, String)> {
+    let mut parts = state.splitn(2, ':');
+
+    match (parts.next(), parts.next()) {
+        (Some(csrf), Some(session)) if !csrf.is_empty() && !session.is_empty() => {
+            Ok((csrf.to_string(), session.to_string()))
+        }
+        _ => Err(BeemFlowError::auth(
+            "Invalid OAuth state format - expected format: {csrf_token}:{session_id}",
+        )),
+    }
+}
+
+/// Generate a simple HTML error page
+fn error_html(title: &str, heading: &str, message: Option<&str>, retry_link: bool) -> String {
+    let message_html = message.map_or(String::new(), |msg| format!("    <p>{}</p>\n", msg));
+    let retry_html = if retry_link {
+        "    <a href=\"/oauth/providers\">Try again</a>\n"
+    } else {
+        ""
+    };
+
+    format!(
+        r#"<!DOCTYPE html>
+<html>
+<head><title>{}</title></head>
+<body>
+    <h1>{}</h1>
+{}{}</body>
+</html>"#,
+        title, heading, message_html, retry_html
+    )
+}
+
+// ============================================================================
 // AUTO-GENERATED ROUTES - All operation routes are now generated from metadata
 // ============================================================================
 // The old handler macros are no longer needed - routes are auto-generated
@@ -123,6 +200,7 @@ pub async fn start_server(config: Config) -> Result<()> {
     let http_config = config.http.as_ref().cloned().unwrap_or_else(|| HttpConfig {
         host: "127.0.0.1".to_string(),
         port: crate::constants::DEFAULT_HTTP_PORT,
+        secure: false, // Default to false for local development
     });
 
     // Use centralized dependency creation from core module
@@ -141,7 +219,7 @@ pub async fn start_server(config: Config) -> Result<()> {
         dependencies.storage.clone(),
         dependencies.registry_manager.clone(),
         redirect_uri,
-    ));
+    )?);
 
     // Initialize template renderer
     let mut template_renderer = template::TemplateRenderer::new("static");
@@ -166,6 +244,7 @@ pub async fn start_server(config: Config) -> Result<()> {
         storage: dependencies.storage.clone(),
         config: oauth_config,
         rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+        session_store: session_store.clone(),
     });
 
     // Create OAuth middleware state
@@ -177,13 +256,27 @@ pub async fn start_server(config: Config) -> Result<()> {
         registry_manager: state.registry.get_dependencies().registry_manager.clone(),
     };
 
-    // Build router
+    // Resolve static directory to absolute path with validation
+    let static_dir = std::env::current_dir()
+        .map_err(|e| BeemFlowError::config(format!("Failed to get current directory: {}", e)))?
+        .join("static");
+
+    // Canonicalize to validate the path exists and prevent traversal
+    let static_dir = tokio::fs::canonicalize(&static_dir).await.map_err(|e| {
+        BeemFlowError::config(format!("Static directory not found or invalid: {}", e))
+    })?;
+
+    tracing::info!("Serving static files from: {}", static_dir.display());
+
+    // Build router with config for CORS
     let app = build_router(
         state,
         webhook_state,
         oauth_server_state,
         oauth_middleware_state,
         session_store,
+        &http_config,
+        static_dir,
     );
 
     // Determine bind address
@@ -249,8 +342,8 @@ fn build_operation_routes(state: &AppState) -> Router<AppState> {
                     }
                 }
 
-                // Try to read JSON body if present
-                let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
+                // Try to read JSON body if present (with size limit to prevent DoS)
+                let bytes = axum::body::to_bytes(req.into_body(), MAX_BODY_SIZE)
                     .await
                     .unwrap_or_default();
                 if !bytes.is_empty()
@@ -303,6 +396,8 @@ fn build_router(
     oauth_server_state: Arc<OAuthServerState>,
     _oauth_middleware_state: Arc<OAuthMiddlewareState>,
     _session_store: Arc<session::SessionStore>,
+    http_config: &HttpConfig,
+    static_dir: std::path::PathBuf,
 ) -> Router {
     // Create OAuth server routes (authorization server endpoints)
     let oauth_routes = create_oauth_routes(oauth_server_state);
@@ -364,8 +459,8 @@ fn build_router(
     // Merge OAuth server routes (which have their own state) with our app routes
 
     Router::new()
-        // Static file serving for OAuth UI
-        .nest_service("/static", ServeDir::new("static"))
+        // Static file serving for OAuth UI (with validated absolute path)
+        .nest_service("/static", ServeDir::new(static_dir))
         // OAuth 2.1 Authorization Server (RFC 6749 & 8252)
         .merge(oauth_routes)
         // Application routes
@@ -385,13 +480,36 @@ fn build_router(
                                 .latency_unit(LatencyUnit::Micros),
                         ),
                 )
-                // CORS layer for cross-origin requests
-                .layer(
+                // CORS layer for cross-origin requests (restrictive policy)
+                .layer({
+                    // Build allowed origins dynamically from config
+                    let origin_localhost = format!("http://localhost:{}", http_config.port)
+                        .parse::<axum::http::HeaderValue>()
+                        .expect("valid header value");
+                    let origin_127 = format!("http://127.0.0.1:{}", http_config.port)
+                        .parse::<axum::http::HeaderValue>()
+                        .expect("valid header value");
+
                     CorsLayer::new()
-                        .allow_origin(Any)
-                        .allow_methods(Any)
-                        .allow_headers(Any),
-                ),
+                        // Allow localhost origins based on configured port
+                        .allow_origin([origin_localhost, origin_127])
+                        // Only allow necessary HTTP methods
+                        .allow_methods([
+                            axum::http::Method::GET,
+                            axum::http::Method::POST,
+                            axum::http::Method::PUT,
+                            axum::http::Method::PATCH,
+                            axum::http::Method::DELETE,
+                            axum::http::Method::OPTIONS,
+                        ])
+                        // Only allow necessary headers
+                        .allow_headers([
+                            axum::http::header::CONTENT_TYPE,
+                            axum::http::header::AUTHORIZATION,
+                            axum::http::header::HeaderName::from_static("x-requested-with"),
+                        ])
+                        .allow_credentials(true)
+                }),
         )
 }
 
@@ -440,15 +558,8 @@ async fn oauth_providers_handler(State(state): State<AppState>) -> impl IntoResp
         .iter()
         .map(|entry| {
             let name = entry.display_name.as_ref().unwrap_or(&entry.name);
-
-            // Map provider name to emoji icon
-            let icon = match name.to_lowercase().as_str() {
-                name if name.contains("github") => "🐙",
-                name if name.contains("google") => "🔍",
-                name if name.contains("microsoft") => "🪟",
-                name if name.contains("slack") => "💬",
-                _ => "🔗",
-            };
+            // Use icon from registry entry, default to 🔗 if not specified
+            let icon = entry.icon.as_deref().unwrap_or("🔗");
 
             // Format scopes
             let scopes_str = entry
@@ -466,16 +577,10 @@ async fn oauth_providers_handler(State(state): State<AppState>) -> impl IntoResp
         })
         .collect();
 
-    // Add storage providers
+    // Add storage providers (custom providers added by users)
     for p in storage_providers.iter() {
-        // Map provider name to emoji icon
-        let icon = match p.name.to_lowercase().as_str() {
-            name if name.contains("github") => "🐙",
-            name if name.contains("google") => "🔍",
-            name if name.contains("microsoft") => "🪟",
-            name if name.contains("slack") => "💬",
-            _ => "🔗",
-        };
+        // Custom storage providers use a default icon (could be extended to support icons in storage)
+        let icon = "🔗";
 
         // Format scopes
         let scopes_str = p
@@ -504,14 +609,8 @@ async fn oauth_providers_handler(State(state): State<AppState>) -> impl IntoResp
         Ok(html) => Html(html),
         Err(e) => {
             tracing::error!("Failed to render providers template: {}", e);
-            Html(format!(
-                r#"<!DOCTYPE html>
-<html>
-<head><title>Error</title></head>
-<body><h1>Template Error</h1><p>{}</p></body>
-</html>"#,
-                e
-            ))
+            let message = format!("{}", e);
+            Html(error_html("Error", "Template Error", Some(&message), false))
         }
     }
 }
@@ -556,7 +655,7 @@ async fn oauth_success_handler() -> impl IntoResponse {
 async fn oauth_callback_handler(
     State(state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-    headers: axum::http::HeaderMap,
+    _headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     // Check for OAuth error response
     if let Some(error) = params.get("error") {
@@ -565,20 +664,14 @@ async fn oauth_callback_handler(
             .map(|s| s.as_str())
             .unwrap_or("Unknown error");
         tracing::error!("OAuth authorization failed: {} - {}", error, error_desc);
+        let message = format!("Error: {}\nDescription: {}", error, error_desc);
         return (
             StatusCode::BAD_REQUEST,
-            Html(format!(
-                r#"<!DOCTYPE html>
-<html>
-<head><title>OAuth Error</title></head>
-<body>
-    <h1>OAuth Authorization Failed</h1>
-    <p>Error: {}</p>
-    <p>Description: {}</p>
-    <a href="/oauth/providers">Try again</a>
-</body>
-</html>"#,
-                error, error_desc
+            Html(error_html(
+                "OAuth Error",
+                "OAuth Authorization Failed",
+                Some(&message),
+                true,
             )),
         )
             .into_response();
@@ -590,16 +683,12 @@ async fn oauth_callback_handler(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                Html(
-                    r#"<!DOCTYPE html>
-<html>
-<head><title>OAuth Error</title></head>
-<body>
-    <h1>Missing Authorization Code</h1>
-    <a href="/oauth/providers">Try again</a>
-</body>
-</html>"#,
-                ),
+                Html(error_html(
+                    "OAuth Error",
+                    "Missing Authorization Code",
+                    None,
+                    true,
+                )),
             )
                 .into_response();
         }
@@ -610,138 +699,86 @@ async fn oauth_callback_handler(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                Html(
-                    r#"<!DOCTYPE html>
-<html>
-<head><title>OAuth Error</title></head>
-<body>
-    <h1>Missing State Parameter</h1>
-    <a href="/oauth/providers">Try again</a>
-</body>
-</html>"#,
-                ),
+                Html(error_html(
+                    "OAuth Error",
+                    "Missing State Parameter",
+                    None,
+                    true,
+                )),
             )
                 .into_response();
         }
     };
 
-    // Get session ID from cookie header
-    let session_id = match headers.get(axum::http::header::COOKIE) {
-        Some(cookie_header) => {
-            // Parse cookie header to extract beemflow_session
-            let cookie_str = cookie_header.to_str().unwrap_or("");
-            let session_id = cookie_str
-                .split(';')
-                .map(|c| c.trim())
-                .find_map(|c| c.strip_prefix("beemflow_session="));
-
-            match session_id {
-                Some(sid) => sid,
-                None => {
-                    tracing::error!("No beemflow_session cookie found in OAuth callback");
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Html(
-                            r#"<!DOCTYPE html>
-<html>
-<head><title>OAuth Error</title></head>
-<body>
-    <h1>Session Not Found</h1>
-    <p>Your session has expired or was not found. Please try again.</p>
-    <a href="/oauth/providers">Try again</a>
-</body>
-</html>"#,
-                        ),
-                    )
-                        .into_response();
-                }
-            }
-        }
-        None => {
-            tracing::error!("No Cookie header found in OAuth callback");
+    // Decode state to extract CSRF token and session ID
+    // Format: {csrf_token}:{session_id}
+    let (csrf_token, session_id) = match decode_oauth_state(state_param) {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!("Failed to decode OAuth state: {}", e);
             return (
                 StatusCode::BAD_REQUEST,
-                Html(
-                    r#"<!DOCTYPE html>
-<html>
-<head><title>OAuth Error</title></head>
-<body>
-    <h1>Session Not Found</h1>
-    <p>Your session has expired or was not found. Please try again.</p>
-    <a href="/oauth/providers">Try again</a>
-</body>
-</html>"#,
-                ),
+                Html(error_html(
+                    "OAuth Error",
+                    "Invalid State Parameter",
+                    Some("The OAuth state parameter is invalid or malformed."),
+                    true,
+                )),
             )
                 .into_response();
         }
     };
 
-    // Get session from store
-    let session = match state.session_store.get_session(session_id) {
+    // Look up session by ID (extracted from state parameter)
+    let session = match state.session_store.get_session(&session_id) {
         Some(s) => s,
         None => {
             tracing::error!("Invalid or expired session: {}", session_id);
             return (
                 StatusCode::BAD_REQUEST,
-                Html(
-                    r#"<!DOCTYPE html>
-<html>
-<head><title>OAuth Error</title></head>
-<body>
-    <h1>Session Expired</h1>
-    <p>Your session has expired. Please try again.</p>
-    <a href="/oauth/providers">Try again</a>
-</body>
-</html>"#,
-                ),
+                Html(error_html(
+                    "OAuth Error",
+                    "Session Expired",
+                    Some("Your session has expired. Please try again."),
+                    true,
+                )),
             )
                 .into_response();
         }
     };
 
-    // Validate state parameter (CSRF protection)
-    let stored_state = match session.data.get("oauth_state").and_then(|v| v.as_str()) {
+    // Validate CSRF token matches what we stored in the session
+    let stored_csrf = match session.data.get("oauth_state").and_then(|v| v.as_str()) {
         Some(s) => s,
         None => {
             tracing::error!("No oauth_state found in session");
             return (
                 StatusCode::BAD_REQUEST,
-                Html(
-                    r#"<!DOCTYPE html>
-<html>
-<head><title>OAuth Error</title></head>
-<body>
-    <h1>Invalid Session</h1>
-    <p>Session is missing OAuth state. Please try again.</p>
-    <a href="/oauth/providers">Try again</a>
-</body>
-</html>"#,
-                ),
+                Html(error_html(
+                    "OAuth Error",
+                    "Invalid Session",
+                    Some("Session is missing OAuth state. Please try again."),
+                    true,
+                )),
             )
                 .into_response();
         }
     };
 
-    if stored_state != state_param {
+    if stored_csrf != csrf_token {
         tracing::error!(
-            "State parameter mismatch - possible CSRF attack. Expected: {}, Got: {}",
-            stored_state,
-            state_param
+            "CSRF token mismatch - possible CSRF attack. Expected: {}, Got: {}",
+            stored_csrf,
+            csrf_token
         );
         return (
             StatusCode::BAD_REQUEST,
-            Html(
-                r#"<!DOCTYPE html>
-<html>
-<head><title>OAuth Error</title></head>
-<body>
-    <h1>Security Error</h1>
-    <p>State parameter mismatch. Possible CSRF attack detected.</p>
-    <a href="/oauth/providers">Try again</a>
-</body>
-</html>"#,
-            ),
+            Html(error_html(
+                "OAuth Error",
+                "Security Error",
+                Some("State parameter mismatch. Possible CSRF attack detected."),
+                true,
+            )),
         )
             .into_response();
     }
@@ -757,17 +794,12 @@ async fn oauth_callback_handler(
             tracing::error!("No code_verifier found in session");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Html(
-                    r#"<!DOCTYPE html>
-<html>
-<head><title>OAuth Error</title></head>
-<body>
-    <h1>Session Error</h1>
-    <p>Missing code verifier. Please try again.</p>
-    <a href="/oauth/providers">Try again</a>
-</body>
-</html>"#,
-                ),
+                Html(error_html(
+                    "OAuth Error",
+                    "Session Error",
+                    Some("Missing code verifier. Please try again."),
+                    true,
+                )),
             )
                 .into_response();
         }
@@ -783,17 +815,12 @@ async fn oauth_callback_handler(
             tracing::error!("No provider_id found in session");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Html(
-                    r#"<!DOCTYPE html>
-<html>
-<head><title>OAuth Error</title></head>
-<body>
-    <h1>Session Error</h1>
-    <p>Missing provider ID. Please try again.</p>
-    <a href="/oauth/providers">Try again</a>
-</body>
-</html>"#,
-                ),
+                Html(error_html(
+                    "OAuth Error",
+                    "Session Error",
+                    Some("Missing provider ID. Please try again."),
+                    true,
+                )),
             )
                 .into_response();
         }
@@ -819,7 +846,7 @@ async fn oauth_callback_handler(
             );
 
             // Clean up session
-            state.session_store.delete_session(session_id);
+            state.session_store.delete_session(&session_id);
 
             // Redirect to success page
             Redirect::to("/oauth/success").into_response()
@@ -828,21 +855,16 @@ async fn oauth_callback_handler(
             tracing::error!("Failed to exchange authorization code: {}", e);
 
             // Clean up session even on error
-            state.session_store.delete_session(session_id);
+            state.session_store.delete_session(&session_id);
 
+            let message = format!("Failed to exchange authorization code for tokens: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Html(format!(
-                    r#"<!DOCTYPE html>
-<html>
-<head><title>OAuth Error</title></head>
-<body>
-    <h1>Token Exchange Failed</h1>
-    <p>Failed to exchange authorization code for tokens: {}</p>
-    <a href="/oauth/providers">Try again</a>
-</body>
-</html>"#,
-                    e
+                Html(error_html(
+                    "OAuth Error",
+                    "Token Exchange Failed",
+                    Some(&message),
+                    true,
                 )),
             )
                 .into_response()
@@ -891,10 +913,22 @@ async fn oauth_provider_handler(
     // Convert Vec<String> to Vec<&str>
     let scope_refs: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
 
-    // Build authorization URL using oauth2 crate
-    let (auth_url, state_param, code_verifier) = match state
+    // Create session first (needed for encoding session_id into state)
+    let session = state
+        .session_store
+        .create_session("oauth_flow", chrono::Duration::minutes(10));
+
+    // Generate random CSRF token for security
+    let csrf_token = oauth2::CsrfToken::new_random();
+    let csrf_secret = csrf_token.secret().clone();
+
+    // Encode session ID into state parameter for stateless callback handling
+    let combined_state = encode_oauth_state(&csrf_secret, &session.id);
+
+    // Build authorization URL with custom state (csrf embedded in state parameter)
+    let (auth_url, code_verifier) = match state
         .oauth_client
-        .build_auth_url(&provider, &scope_refs, None)
+        .build_auth_url(&provider, &scope_refs, None, Some(combined_state))
         .await
     {
         Ok(result) => result,
@@ -908,15 +942,10 @@ async fn oauth_provider_handler(
         }
     };
 
-    // Create session to store OAuth state
-    let session = state
-        .session_store
-        .create_session("oauth_flow", chrono::Duration::minutes(10));
-
-    // Store OAuth parameters in session for callback validation
+    // Store CSRF token (not combined state!) in session for callback validation
     state
         .session_store
-        .update_session(&session.id, "oauth_state".to_string(), json!(state_param));
+        .update_session(&session.id, "oauth_state".to_string(), json!(csrf_secret));
     state.session_store.update_session(
         &session.id,
         "oauth_code_verifier".to_string(),
@@ -933,15 +962,10 @@ async fn oauth_provider_handler(
         json!("default"),
     );
 
-    // Set session cookie and redirect to auth URL
-    let cookie = session::set_session_cookie(&session.id, session.expires_at);
-
+    // Redirect to OAuth provider (session_id is embedded in state parameter)
     (
         StatusCode::FOUND,
-        [
-            (axum::http::header::LOCATION, auth_url.as_str()),
-            (axum::http::header::SET_COOKIE, cookie.as_str()),
-        ],
+        [(axum::http::header::LOCATION, auth_url.as_str())],
     )
         .into_response()
 }
@@ -1143,20 +1167,30 @@ async fn authorize_oauth_provider_handler(
     // Get integration name (optional)
     let integration = params.get("integration").map(|s| s.as_str());
 
-    // Build authorization URL
-    let (auth_url, state_param, code_verifier) = state
-        .oauth_client
-        .build_auth_url(&provider_id, &scopes, integration)
-        .await?;
-
-    // Store state and code_verifier in session for callback validation
+    // Create session first (needed for encoding session_id into state)
     let session = state
         .session_store
         .create_session("oauth_flow", chrono::Duration::minutes(10));
 
+    // Generate random CSRF token for security
+    let csrf_token = oauth2::CsrfToken::new_random();
+    let csrf_secret = csrf_token.secret().clone();
+
+    // Encode session ID into state parameter for stateless callback handling
+    // Format: {csrf_token}:{session_id}
+    // This eliminates the need for cookies or query parameters in the callback
+    let combined_state = encode_oauth_state(&csrf_secret, &session.id);
+
+    // Build authorization URL with custom state (csrf embedded in state parameter)
+    let (auth_url, code_verifier) = state
+        .oauth_client
+        .build_auth_url(&provider_id, &scopes, integration, Some(combined_state))
+        .await?;
+
+    // Store CSRF token (not combined state!) in session for callback validation
     state
         .session_store
-        .update_session(&session.id, "oauth_state".to_string(), json!(state_param));
+        .update_session(&session.id, "oauth_state".to_string(), json!(csrf_secret));
     state.session_store.update_session(
         &session.id,
         "oauth_code_verifier".to_string(),
@@ -1173,10 +1207,9 @@ async fn authorize_oauth_provider_handler(
         json!(integration.unwrap_or("default")),
     );
 
-    // Return authorization URL and session info
+    // Return authorization URL (session_id is now embedded in the state parameter)
     Ok(Json(json!({
         "authorization_url": auth_url,
-        "session_id": session.id,
         "expires_at": session.expires_at,
     })))
 }
@@ -1186,7 +1219,23 @@ async fn oauth_api_callback_handler(
     State(state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> std::result::Result<Json<Value>, AppError> {
-    // Get authorization code and state
+    // Check for OAuth provider errors first (e.g., user denied access)
+    if let Some(error) = params.get("error") {
+        let error_desc = params
+            .get("error_description")
+            .map(|s| s.as_str())
+            .unwrap_or("Unknown OAuth error");
+
+        tracing::warn!("OAuth provider error: {} - {}", error, error_desc);
+
+        return Err(BeemFlowError::auth(format!(
+            "OAuth provider error: {} - {}",
+            error, error_desc
+        ))
+        .into());
+    }
+
+    // Get authorization code and state from OAuth provider
     let code = params
         .get("code")
         .ok_or_else(|| BeemFlowError::auth("Missing authorization code"))?;
@@ -1195,29 +1244,28 @@ async fn oauth_api_callback_handler(
         .get("state")
         .ok_or_else(|| BeemFlowError::auth("Missing state parameter"))?;
 
-    // For simplicity, we'll look through all sessions to find the matching state
-    // In production, this would use cookies or query parameters to identify the session
-    // For now, we'll extract these from a session_id query parameter or stored state
+    // Decode state to extract CSRF token and session ID
+    // Format: {csrf_token}:{session_id}
+    let (csrf_token, session_id) = decode_oauth_state(state_param)?;
 
-    // Get session_id from query or error
-    let session_id = params
-        .get("session_id")
-        .ok_or_else(|| BeemFlowError::auth("Missing session_id parameter"))?;
-
+    // Look up session by ID (extracted from state parameter)
     let session = state
         .session_store
-        .get_session(session_id)
+        .get_session(&session_id)
         .ok_or_else(|| BeemFlowError::auth("Invalid or expired session"))?;
 
-    // Validate state parameter matches
-    let stored_state = session
+    // Validate CSRF token matches what we stored in the session
+    let stored_csrf = session
         .data
         .get("oauth_state")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| BeemFlowError::auth("No state found in session"))?;
+        .ok_or_else(|| BeemFlowError::auth("No CSRF token found in session"))?;
 
-    if stored_state != state_param {
-        return Err(BeemFlowError::auth("State parameter mismatch - possible CSRF attack").into());
+    if stored_csrf != csrf_token {
+        return Err(BeemFlowError::auth(
+            "CSRF token mismatch - possible CSRF attack. Expected token does not match state.",
+        )
+        .into());
     }
 
     // Get stored code_verifier and provider_id
@@ -1246,7 +1294,7 @@ async fn oauth_api_callback_handler(
         .await?;
 
     // Clean up session
-    state.session_store.delete_session(session_id);
+    state.session_store.delete_session(&session_id);
 
     Ok(Json(json!({
         "success": true,
@@ -1263,3 +1311,11 @@ async fn oauth_api_callback_handler(
 
 #[cfg(test)]
 mod http_test;
+#[cfg(test)]
+mod response_test;
+#[cfg(test)]
+mod session_test;
+#[cfg(test)]
+mod template_test;
+#[cfg(test)]
+mod webhook_test;

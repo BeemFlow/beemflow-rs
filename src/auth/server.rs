@@ -3,12 +3,13 @@
 //! Implements a secure OAuth 2.1 server for provider integrations.
 //! Supports PKCE, dynamic client registration, and secure token management.
 
+use crate::http::session::SessionStore;
 use crate::model::*;
 use crate::storage::Storage;
 use axum::{
     Json, Router,
     extract::{Query, State},
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use chrono::{Duration, Utc};
@@ -49,6 +50,26 @@ pub struct OAuthServerState {
     pub storage: Arc<dyn Storage>,
     pub config: OAuthConfig,
     pub rate_limiter: Arc<RwLock<HashMap<String, Vec<SystemTime>>>>,
+    pub session_store: Arc<SessionStore>,
+}
+
+/// Pending authorization request (stored in session during consent flow)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingAuthorization {
+    client_id: String,
+    redirect_uri: String,
+    scope: String,
+    state: Option<String>,
+    code_challenge: Option<String>,
+    code_challenge_method: Option<String>,
+    client_name: String,
+}
+
+/// Consent form data
+#[derive(Debug, Deserialize)]
+struct ConsentForm {
+    csrf_token: String,
+    action: String,
 }
 
 /// Dynamic client registration request
@@ -137,6 +158,8 @@ pub fn create_oauth_routes(state: Arc<OAuthServerState>) -> Router {
         )
         .route("/oauth/register", post(handle_client_registration))
         .route("/oauth/authorize", get(handle_authorize))
+        .route("/oauth/consent", get(handle_consent_screen))
+        .route("/oauth/consent", post(handle_consent_approval))
         .route("/oauth/token", post(handle_token))
         .route("/oauth/revoke", post(handle_token_revocation))
         .route("/oauth/introspect", post(handle_token_introspection))
@@ -306,24 +329,365 @@ async fn handle_authorize(
         (None, None)
     };
 
-    // For now, auto-approve for registered clients
-    // In production, this would show a consent screen
+    // Create a session for the consent flow
+    let session = state
+        .session_store
+        .create_session("oauth_user", chrono::Duration::minutes(10));
 
-    // Generate authorization code
+    // Store pending authorization in session
+    let pending = PendingAuthorization {
+        client_id: req.client_id.clone(),
+        redirect_uri: req.redirect_uri.clone(),
+        scope: scope.clone(),
+        state: req.state.clone(),
+        code_challenge: code_challenge.clone(),
+        code_challenge_method: code_challenge_method.clone(),
+        client_name: client.name.clone(),
+    };
+
+    if !state.session_store.update_session(
+        &session.id,
+        "pending_auth".to_string(),
+        serde_json::to_value(&pending).unwrap_or_default(),
+    ) {
+        tracing::error!("Failed to store pending authorization in session");
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "server_error",
+        )
+            .into_response();
+    }
+
+    // Generate CSRF token for consent form
+    let csrf_token = state.session_store.generate_csrf_token(&session.id);
+    if csrf_token.is_none() {
+        tracing::error!("Failed to generate CSRF token for consent flow");
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "server_error",
+        )
+            .into_response();
+    }
+
+    // Set session cookie and redirect to consent screen
+    // Use secure flag from issuer URL (https) or default to false for local dev
+    let secure = state.config.issuer.starts_with("https://");
+    let cookie = crate::http::session::set_session_cookie(&session.id, session.expires_at, secure);
+
+    Response::builder()
+        .status(axum::http::StatusCode::FOUND)
+        .header(axum::http::header::LOCATION, "/oauth/consent")
+        .header(axum::http::header::SET_COOKIE, cookie)
+        .body(axum::body::Body::empty())
+        .unwrap_or_else(|_| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to redirect",
+            )
+                .into_response()
+        })
+}
+
+/// Handle consent screen display
+async fn handle_consent_screen(
+    State(state): State<Arc<OAuthServerState>>,
+    cookie_header: axum::http::HeaderMap,
+) -> Response {
+    // Extract session ID from cookie
+    let session_id = cookie_header
+        .get(axum::http::header::COOKIE)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|cookie_str| {
+            cookie_str
+                .split(';')
+                .map(|c| c.trim())
+                .find_map(|c| c.strip_prefix("beemflow_session="))
+        })
+        .map(|s| s.to_string());
+
+    let Some(session_id) = session_id else {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "No session found. Please restart the authorization flow.",
+        )
+            .into_response();
+    };
+
+    // Get session and pending authorization
+    let session = state.session_store.get_session(&session_id);
+    let Some(session) = session else {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "Session expired. Please restart the authorization flow.",
+        )
+            .into_response();
+    };
+
+    let pending_value = session.data.get("pending_auth");
+    let Some(pending_value) = pending_value else {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "No pending authorization. Please restart the authorization flow.",
+        )
+            .into_response();
+    };
+
+    let pending: PendingAuthorization = match serde_json::from_value(pending_value.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Failed to deserialize pending authorization: {}", e);
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+            )
+                .into_response();
+        }
+    };
+
+    // Get CSRF token from session
+    let csrf_token = session
+        .data
+        .get("csrf_token")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    // Generate scope descriptions
+    let scope_items: Vec<String> = pending
+        .scope
+        .split_whitespace()
+        .map(|s| {
+            let description = match s {
+                "mcp" => "Access MCP server capabilities",
+                "openid" => "Verify your identity",
+                "profile" => "Access your profile information",
+                "email" => "Access your email address",
+                _ => s,
+            };
+            format!("<li><strong>{}</strong>: {}</li>", s, description)
+        })
+        .collect();
+
+    let scope_list = scope_items.join("\n            ");
+
+    // Render consent screen HTML
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authorization Request</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            max-width: 500px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }}
+        .consent-box {{
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }}
+        h1 {{
+            font-size: 24px;
+            margin-bottom: 20px;
+            color: #333;
+        }}
+        .client-info {{
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }}
+        .client-name {{
+            font-size: 18px;
+            font-weight: bold;
+            color: #007bff;
+        }}
+        .scopes {{
+            margin: 20px 0;
+        }}
+        .scopes ul {{
+            padding-left: 20px;
+        }}
+        .scopes li {{
+            margin: 10px 0;
+            line-height: 1.5;
+        }}
+        .buttons {{
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+        }}
+        button {{
+            flex: 1;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            font-weight: 500;
+        }}
+        .approve {{
+            background-color: #007bff;
+            color: white;
+        }}
+        .approve:hover {{
+            background-color: #0056b3;
+        }}
+        .deny {{
+            background-color: #6c757d;
+            color: white;
+        }}
+        .deny:hover {{
+            background-color: #5a6268;
+        }}
+        .warning {{
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+            font-size: 14px;
+            color: #856404;
+        }}
+    </style>
+</head>
+<body>
+    <div class="consent-box">
+        <h1>Authorization Request</h1>
+
+        <div class="client-info">
+            <div class="client-name">{}</div>
+            <div>is requesting access to your account</div>
+        </div>
+
+        <div class="scopes">
+            <strong>This application will be able to:</strong>
+            <ul>
+            {}
+            </ul>
+        </div>
+
+        <form method="POST" action="/oauth/consent">
+            <input type="hidden" name="csrf_token" value="{}">
+            <div class="buttons">
+                <button type="submit" name="action" value="approve" class="approve">
+                    Allow Access
+                </button>
+                <button type="submit" name="action" value="deny" class="deny">
+                    Deny
+                </button>
+            </div>
+        </form>
+
+        <div class="warning">
+            Only approve if you trust this application and understand what access you're granting.
+        </div>
+    </div>
+</body>
+</html>"#,
+        pending.client_name, scope_list, csrf_token
+    );
+
+    Html(html).into_response()
+}
+
+/// Handle consent approval or denial
+async fn handle_consent_approval(
+    State(state): State<Arc<OAuthServerState>>,
+    cookie_header: axum::http::HeaderMap,
+    axum::Form(form): axum::Form<ConsentForm>,
+) -> Response {
+    // Extract session ID from cookie
+    let session_id = cookie_header
+        .get(axum::http::header::COOKIE)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|cookie_str| {
+            cookie_str
+                .split(';')
+                .map(|c| c.trim())
+                .find_map(|c| c.strip_prefix("beemflow_session="))
+        })
+        .map(|s| s.to_string());
+
+    let Some(session_id) = session_id else {
+        return (axum::http::StatusCode::BAD_REQUEST, "No session found").into_response();
+    };
+
+    // Validate CSRF token
+    if !state
+        .session_store
+        .validate_csrf_token(&session_id, &form.csrf_token)
+    {
+        return (axum::http::StatusCode::FORBIDDEN, "CSRF validation failed").into_response();
+    }
+
+    // Get session and pending authorization
+    let session = state.session_store.get_session(&session_id);
+    let Some(session) = session else {
+        return (axum::http::StatusCode::BAD_REQUEST, "Session expired").into_response();
+    };
+
+    let pending_value = session.data.get("pending_auth");
+    let Some(pending_value) = pending_value else {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "No pending authorization",
+        )
+            .into_response();
+    };
+
+    let pending: PendingAuthorization = match serde_json::from_value(pending_value.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Failed to deserialize pending authorization: {}", e);
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+            )
+                .into_response();
+        }
+    };
+
+    // Check user action
+    if form.action != "approve" {
+        // User denied - redirect with error
+        let redirect_url = if let Some(state_param) = pending.state {
+            format!(
+                "{}?error=access_denied&error_description=User denied authorization&state={}",
+                pending.redirect_uri, state_param
+            )
+        } else {
+            format!(
+                "{}?error=access_denied&error_description=User denied authorization",
+                pending.redirect_uri
+            )
+        };
+
+        // Clean up session
+        state.session_store.delete_session(&session_id);
+
+        return axum::response::Redirect::temporary(&redirect_url).into_response();
+    }
+
+    // User approved - generate authorization code
     let code = generate_authorization_code();
 
     // Store authorization code with PKCE challenge, scope, and client info
     let token = OAuthToken {
         id: Uuid::new_v4().to_string(),
-        client_id: req.client_id.clone(),
+        client_id: pending.client_id.clone(),
         user_id: "default_user".to_string(), // In production, get from authenticated session
-        redirect_uri: req.redirect_uri.clone(),
-        scope: scope.clone(),
+        redirect_uri: pending.redirect_uri.clone(),
+        scope: pending.scope.clone(),
         code: Some(code.clone()),
         code_create_at: Some(Utc::now()),
         code_expires_in: Some(std::time::Duration::from_secs(600)), // 10 minutes
-        code_challenge,
-        code_challenge_method,
+        code_challenge: pending.code_challenge,
+        code_challenge_method: pending.code_challenge_method,
         access: None,
         access_create_at: None,
         access_expires_in: None,
@@ -341,11 +705,17 @@ async fn handle_authorize(
             .into_response();
     }
 
+    // Clean up session after successful authorization
+    state.session_store.delete_session(&session_id);
+
     // Build redirect URL with state if provided
-    let redirect_url = if let Some(state_param) = req.state {
-        format!("{}?code={}&state={}", req.redirect_uri, code, state_param)
+    let redirect_url = if let Some(state_param) = pending.state {
+        format!(
+            "{}?code={}&state={}",
+            pending.redirect_uri, code, state_param
+        )
     } else {
-        format!("{}?code={}", req.redirect_uri, code)
+        format!("{}?code={}", pending.redirect_uri, code)
     };
 
     axum::response::Redirect::temporary(&redirect_url).into_response()
@@ -412,7 +782,14 @@ async fn handle_authorization_code_grant(
             let computed_challenge =
                 base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, hash);
 
-            if &computed_challenge != stored_challenge {
+            // Use constant-time comparison to prevent timing attacks
+            use subtle::ConstantTimeEq;
+            if computed_challenge
+                .as_bytes()
+                .ct_eq(stored_challenge.as_bytes())
+                .unwrap_u8()
+                == 0
+            {
                 return (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_grant", "error_description": "PKCE validation failed"}))).into_response();
             }
         }
@@ -602,8 +979,15 @@ async fn handle_client_credentials_grant(
         }
     };
 
-    // Verify client secret matches
-    if client.secret != client_secret {
+    // Verify client secret matches (constant-time to prevent timing attacks)
+    use subtle::ConstantTimeEq;
+    if client
+        .secret
+        .as_bytes()
+        .ct_eq(client_secret.as_bytes())
+        .unwrap_u8()
+        == 0
+    {
         return (
             axum::http::StatusCode::UNAUTHORIZED,
             Json(json!({"error": "invalid_client", "error_description": "invalid client_secret"})),
@@ -685,36 +1069,36 @@ fn is_valid_redirect_uri(uri: &str, allow_localhost: bool) -> bool {
     }
 }
 
-/// Generate secure client secret
+/// Generate secure client secret (using cryptographically secure RNG)
 fn generate_client_secret() -> String {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
-    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &bytes)
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
 }
 
-/// Generate authorization code
+/// Generate authorization code (using cryptographically secure RNG)
 fn generate_authorization_code() -> String {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
-    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &bytes)
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
 }
 
-/// Generate access token
+/// Generate access token (using cryptographically secure RNG)
 fn generate_access_token() -> String {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
-    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &bytes)
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
 }
 
-/// Generate refresh token
+/// Generate refresh token (using cryptographically secure RNG)
 fn generate_refresh_token() -> String {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
-    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &bytes)
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
 }
 
 /// Handle token revocation (RFC 7009)

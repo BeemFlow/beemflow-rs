@@ -22,7 +22,7 @@ fn create_test_event() -> HashMap<String, serde_json::Value> {
 
 #[test]
 fn test_circular_dependency_detected() {
-    let flow = parse_file("flows/integration/circular_dependencies.flow.yaml");
+    let flow = parse_file("flows/integration/circular_dependencies.flow.yaml", None);
 
     assert!(flow.is_ok(), "Flow should parse successfully");
 
@@ -44,7 +44,7 @@ fn test_circular_dependency_detected() {
 
 #[test]
 fn test_optional_dependencies() {
-    let flow = parse_file("flows/integration/optional_dependencies.flow.yaml")
+    let flow = parse_file("flows/integration/optional_dependencies.flow.yaml", None)
         .expect("Failed to parse optional_dependencies flow");
 
     // Validation should pass
@@ -54,7 +54,7 @@ fn test_optional_dependencies() {
     );
 
     // Execution should work
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let result = tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(engine.execute(&flow, create_test_event()));
@@ -68,7 +68,7 @@ fn test_optional_dependencies() {
 
 #[test]
 fn test_complex_dependencies_diamond_pattern() {
-    let flow = parse_file("flows/integration/complex_dependencies.flow.yaml")
+    let flow = parse_file("flows/integration/complex_dependencies.flow.yaml", None)
         .expect("Failed to parse complex_dependencies flow");
 
     // Validation should pass (no cycles in diamond pattern)
@@ -78,7 +78,7 @@ fn test_complex_dependencies_diamond_pattern() {
     );
 
     // Execution should work
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let result = tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(engine.execute(&flow, create_test_event()));
@@ -96,7 +96,7 @@ fn test_dependency_order_current_behavior() {
     // Currently, depends_on is validated but NOT enforced during execution
     // Steps run in YAML file order, not dependency order
 
-    let flow = parse_file("flows/integration/dependency_order.flow.yaml")
+    let flow = parse_file("flows/integration/dependency_order.flow.yaml", None)
         .expect("Failed to parse dependency_order flow");
 
     // Validation should pass
@@ -106,7 +106,7 @@ fn test_dependency_order_current_behavior() {
     );
 
     // Execution works (but steps may run in wrong order - this is current behavior)
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let result = tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(engine.execute(&flow, create_test_event()));
@@ -136,7 +136,7 @@ steps:
       - nonexistent_step
 "#;
 
-    let flow = beemflow::dsl::parse_string(yaml).expect("Flow should parse");
+    let flow = beemflow::dsl::parse_string(yaml, None).expect("Flow should parse");
     let validation_result = Validator::validate(&flow);
 
     assert!(
@@ -167,7 +167,7 @@ steps:
       - step1
 "#;
 
-    let flow = beemflow::dsl::parse_string(yaml).expect("Flow should parse");
+    let flow = beemflow::dsl::parse_string(yaml, None).expect("Flow should parse");
     let validation_result = Validator::validate(&flow);
 
     assert!(
@@ -210,7 +210,7 @@ steps:
       - step_b
 "#;
 
-    let flow = beemflow::dsl::parse_string(yaml).expect("Flow should parse");
+    let flow = beemflow::dsl::parse_string(yaml, None).expect("Flow should parse");
     let validation_result = Validator::validate(&flow);
 
     assert!(
@@ -250,7 +250,7 @@ steps:
       - step2
 "#;
 
-    let flow = beemflow::dsl::parse_string(yaml).expect("Flow should parse");
+    let flow = beemflow::dsl::parse_string(yaml, None).expect("Flow should parse");
 
     assert!(
         Validator::validate(&flow).is_ok(),
@@ -261,8 +261,11 @@ steps:
 #[test]
 fn test_auto_dependency_detection() {
     // Test automatic dependency detection from template references
-    let flow = parse_file("flows/integration/auto_dependency_detection.flow.yaml")
-        .expect("Failed to parse auto_dependency_detection flow");
+    let flow = parse_file(
+        "flows/integration/auto_dependency_detection.flow.yaml",
+        None,
+    )
+    .expect("Failed to parse auto_dependency_detection flow");
 
     // Validation should pass
     assert!(
@@ -271,7 +274,7 @@ fn test_auto_dependency_detection() {
     );
 
     // Execute the flow - steps should run in correct order despite YAML order
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let result = tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(engine.execute(&flow, create_test_event()));
@@ -315,7 +318,7 @@ fn test_auto_dependency_detection() {
 #[test]
 fn test_hybrid_dependencies() {
     // Test hybrid dependencies (manual depends_on + auto-detected)
-    let flow = parse_file("flows/integration/hybrid_dependencies.flow.yaml")
+    let flow = parse_file("flows/integration/hybrid_dependencies.flow.yaml", None)
         .expect("Failed to parse hybrid_dependencies flow");
 
     // Validation should pass
@@ -325,7 +328,7 @@ fn test_hybrid_dependencies() {
     );
 
     // Execute the flow
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let result = tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(engine.execute(&flow, create_test_event()));

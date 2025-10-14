@@ -84,7 +84,17 @@ impl Adapter for McpAdapter {
         ADAPTER_ID_MCP
     }
 
-    async fn execute(&self, inputs: HashMap<String, Value>) -> Result<HashMap<String, Value>> {
+    async fn execute(
+        &self,
+        inputs: HashMap<String, Value>,
+        _ctx: &super::ExecutionContext,
+    ) -> Result<HashMap<String, Value>> {
+        // McpAdapter doesn't currently use ExecutionContext, but it's available for
+        // future features like:
+        // - Passing OAuth credentials to MCP servers
+        // - User-specific server instances (multi-tenancy)
+        // - Rate limiting per user
+
         let tool_use = inputs
             .get(PARAM_SPECIAL_USE)
             .and_then(|v| v.as_str())

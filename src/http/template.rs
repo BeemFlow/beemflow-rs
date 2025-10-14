@@ -33,10 +33,36 @@ impl TemplateRenderer {
 
     /// Load a template from file into cache
     pub async fn load_template(&mut self, name: &str, filename: &str) -> Result<()> {
+        // Validate filename to prevent path traversal attacks
+        if filename.contains("..") || filename.starts_with('/') || filename.contains('\\') {
+            return Err(BeemFlowError::validation(
+                "Invalid template filename: path traversal not allowed",
+            ));
+        }
+
         let path = self.template_dir.join(filename);
-        let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
-            BeemFlowError::config(format!("Failed to load template {}: {}", filename, e))
-        })?;
+
+        // Canonicalize paths to prevent traversal after join
+        let canonical_path = tokio::fs::canonicalize(&path)
+            .await
+            .map_err(|e| BeemFlowError::config(format!("Invalid template path: {}", e)))?;
+
+        let canonical_template_dir = tokio::fs::canonicalize(&self.template_dir)
+            .await
+            .map_err(|e| BeemFlowError::config(format!("Invalid template directory: {}", e)))?;
+
+        // Ensure the resolved path is within the template directory
+        if !canonical_path.starts_with(&canonical_template_dir) {
+            return Err(BeemFlowError::validation(
+                "Template path outside allowed directory",
+            ));
+        }
+
+        let content = tokio::fs::read_to_string(&canonical_path)
+            .await
+            .map_err(|e| {
+                BeemFlowError::config(format!("Failed to load template {}: {}", filename, e))
+            })?;
 
         // Cache the template content
         self.templates.insert(name.to_string(), content);
@@ -81,20 +107,3 @@ impl TemplateRenderer {
 }
 
 // No longer need create_default_templates - all templates are loaded from files using minijinja
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_minijinja_rendering() {
-        let _renderer = TemplateRenderer::new(".");
-
-        // Test that minijinja can render a simple template
-        let mut env = Environment::new();
-        env.add_template("test", "Hello {{name}}!").unwrap();
-        let tmpl = env.get_template("test").unwrap();
-        let result = tmpl.render(serde_json::json!({"name": "World"})).unwrap();
-        assert_eq!(result, "Hello World!");
-    }
-}

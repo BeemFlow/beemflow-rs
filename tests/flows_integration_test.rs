@@ -45,12 +45,12 @@ async fn test_e2e_fetch_and_summarize() {
         return;
     }
 
-    let flow = parse_file("flows/e2e/fetch_and_summarize.flow.yaml")
+    let flow = parse_file("flows/e2e/fetch_and_summarize.flow.yaml", None)
         .expect("Failed to parse fetch_and_summarize flow");
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let result = engine.execute(&flow, create_test_event()).await;
 
     assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
@@ -74,12 +74,12 @@ async fn test_e2e_parallel_openai() {
         return;
     }
 
-    let flow = parse_file("flows/e2e/parallel_openai.flow.yaml")
+    let flow = parse_file("flows/e2e/parallel_openai.flow.yaml", None)
         .expect("Failed to parse parallel_openai flow");
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let result = engine.execute(&flow, create_test_event()).await;
 
     assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
@@ -97,12 +97,12 @@ async fn test_e2e_airtable_integration() {
         return;
     }
 
-    let flow = parse_file("flows/e2e/airtable_integration.flow.yaml")
+    let flow = parse_file("flows/e2e/airtable_integration.flow.yaml", None)
         .expect("Failed to parse airtable_integration flow");
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let result = engine.execute(&flow, create_test_event()).await;
 
     // Note: This might fail if MCP server is not properly configured
@@ -126,12 +126,12 @@ async fn test_integration_http_patterns() {
         return;
     }
 
-    let flow = parse_file("flows/integration/http_patterns.flow.yaml")
+    let flow = parse_file("flows/integration/http_patterns.flow.yaml", None)
         .expect("Failed to parse http_patterns flow");
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let result = engine.execute(&flow, create_test_event()).await;
 
     assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
@@ -164,26 +164,13 @@ async fn test_integration_http_patterns() {
 }
 
 #[tokio::test]
-async fn test_integration_simple_parallel() {
-    let flow = parse_file("flows/integration/simple_parallel.flow.yaml")
-        .expect("Failed to parse simple_parallel flow");
-
-    assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
-
-    let engine = Engine::default();
-    let result = engine.execute(&flow, create_test_event()).await;
-
-    assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
-}
-
-#[tokio::test]
 async fn test_integration_nested_parallel() {
-    let flow = parse_file("flows/integration/nested_parallel.flow.yaml")
+    let flow = parse_file("flows/integration/nested_parallel.flow.yaml", None)
         .expect("Failed to parse nested_parallel flow");
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let result = engine.execute(&flow, create_test_event()).await;
 
     assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
@@ -191,12 +178,12 @@ async fn test_integration_nested_parallel() {
 
 #[tokio::test]
 async fn test_integration_templating_system() {
-    let flow = parse_file("flows/integration/templating_system.flow.yaml")
+    let flow = parse_file("flows/integration/templating_system.flow.yaml", None)
         .expect("Failed to parse templating_system flow");
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let result = engine.execute(&flow, create_test_event()).await;
 
     assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
@@ -208,12 +195,12 @@ async fn test_integration_templating_system() {
 
 #[tokio::test]
 async fn test_example_hello_world() {
-    let flow = parse_file("flows/examples/hello_world.flow.yaml")
+    let flow = parse_file("flows/examples/hello_world.flow.yaml", None)
         .expect("Failed to parse hello_world flow");
 
     assert!(Validator::validate(&flow).is_ok(), "Flow validation failed");
 
-    let engine = Engine::default();
+    let engine = Engine::for_testing();
     let result = engine.execute(&flow, create_test_event()).await;
 
     assert!(result.is_ok(), "Flow execution failed: {:?}", result.err());
@@ -232,14 +219,12 @@ fn test_all_flows_parse_and_validate() {
         "flows/e2e/airtable_integration.flow.yaml",
         // Integration flows
         "flows/integration/http_patterns.flow.yaml",
-        "flows/integration/simple_parallel.flow.yaml",
         "flows/integration/nested_parallel.flow.yaml",
         "flows/integration/templating_system.flow.yaml",
         "flows/integration/parallel_execution.flow.yaml",
         "flows/integration/engine_comprehensive.flow.yaml",
         "flows/integration/spec_compliance_test.flow.yaml",
         "flows/integration/edge_cases.flow.yaml",
-        "flows/integration/performance.flow.yaml",
         // Example flows
         "flows/examples/hello_world.flow.yaml",
         "flows/examples/memory_demo.flow.yaml",
@@ -247,7 +232,7 @@ fn test_all_flows_parse_and_validate() {
 
     let mut failed = vec![];
     for flow_file in &flow_files {
-        match parse_file(flow_file) {
+        match parse_file(flow_file, None) {
             Ok(flow) => {
                 if let Err(e) = Validator::validate(&flow) {
                     failed.push(format!("{}: validation failed - {}", flow_file, e));

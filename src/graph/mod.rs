@@ -50,8 +50,8 @@ impl Graph {
                 .use_
                 .as_ref()
                 .map(|u| format!("{}\n{}", step.id, u))
-                .unwrap_or_else(|| step.id.clone());
-            self.add_node(step.id.clone(), label);
+                .unwrap_or_else(|| step.id.to_string());
+            self.add_node(step.id.to_string(), label);
 
             // Handle parallel blocks
             if step.parallel == Some(true)
@@ -75,14 +75,14 @@ impl Graph {
             } else if let Some(parent) = parent_id {
                 vec![parent.to_string()]
             } else if i > 0 {
-                vec![steps[i - 1].id.clone()]
+                vec![steps[i - 1].id.to_string()]
             } else {
                 Vec::new()
             };
 
             // Create edges for dependencies
             for dep in deps {
-                self.add_edge(dep, step.id.clone(), None);
+                self.add_edge(dep, step.id.to_string(), None);
             }
         }
     }

@@ -113,14 +113,17 @@ impl SessionStore {
         }
     }
 
-    /// Validate a CSRF token for a session
+    /// Validate a CSRF token for a session (constant-time to prevent timing attacks)
     pub fn validate_csrf_token(&self, session_id: &str, token: &str) -> bool {
+        use subtle::ConstantTimeEq;
+
         let sessions = self.sessions.read();
         if let Some(session) = sessions.get(session_id)
             && let Some(stored_token) = session.data.get("csrf_token")
             && let Some(stored_str) = stored_token.as_str()
         {
-            return stored_str == token;
+            // Use constant-time comparison to prevent timing attacks
+            return stored_str.as_bytes().ct_eq(token.as_bytes()).unwrap_u8() == 1;
         }
         false
     }
@@ -144,6 +147,9 @@ impl Default for SessionStore {
 }
 
 /// Session middleware that adds session to request extensions
+///
+/// This middleware also stores the SessionStore in extensions so that
+/// SessionExtractor can look up sessions.
 pub async fn session_middleware(mut req: Request, next: Next) -> Response {
     // Extract session ID from cookie
     let session_id = if let Some(cookie_header) = req.headers().get(header::COOKIE) {
@@ -169,6 +175,114 @@ pub async fn session_middleware(mut req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
+/// Session middleware with SessionStore access
+///
+/// This is a more complete middleware that provides both session ID and
+/// the SessionStore in extensions for SessionExtractor to use.
+pub fn create_session_middleware(
+    session_store: Arc<SessionStore>,
+) -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>>
++ Clone {
+    move |mut req: Request, next: Next| {
+        let session_store = session_store.clone();
+        Box::pin(async move {
+            // Extract session ID from cookie
+            let session_id = if let Some(cookie_header) = req.headers().get(header::COOKIE) {
+                if let Ok(cookie_str) = cookie_header.to_str() {
+                    // Parse cookies to find beemflow_session
+                    cookie_str
+                        .split(';')
+                        .map(|c| c.trim())
+                        .find_map(|c| c.strip_prefix("beemflow_session="))
+                        .map(|s| s.to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Store session ID in request extensions if found
+            if let Some(session_id) = session_id {
+                req.extensions_mut().insert(SessionId(session_id));
+            }
+
+            // Store SessionStore in extensions for SessionExtractor
+            req.extensions_mut().insert(session_store);
+
+            next.run(req).await
+        })
+    }
+}
+
+/// CSRF protection middleware - validates CSRF tokens on state-changing requests
+///
+/// This middleware:
+/// - Exempts safe methods (GET, HEAD, OPTIONS) as per CSRF best practices
+/// - Validates CSRF token on unsafe methods (POST, PUT, PATCH, DELETE)
+/// - Checks X-CSRF-Token header or _csrf form field
+/// - Returns 403 Forbidden if validation fails
+pub fn create_csrf_middleware(
+    session_store: Arc<SessionStore>,
+) -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>>
++ Clone {
+    move |req: Request, next: Next| {
+        let session_store = session_store.clone();
+        Box::pin(async move {
+            let method = req.method().clone();
+
+            // Safe methods don't require CSRF protection (they shouldn't change state)
+            if matches!(
+                method,
+                axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+            ) {
+                return next.run(req).await;
+            }
+
+            // Extract session ID from extensions (set by session_middleware)
+            let session_id = req.extensions().get::<SessionId>().map(|s| s.0.clone());
+
+            // For state-changing requests without a session, allow through
+            // (this handles public endpoints that don't require authentication)
+            let Some(session_id) = session_id else {
+                return next.run(req).await;
+            };
+
+            // Extract CSRF token from header or form data
+            let csrf_token = if let Some(token_header) = req.headers().get("X-CSRF-Token") {
+                token_header.to_str().ok().map(|s| s.to_string())
+            } else {
+                // Could also check form data, but header is preferred
+                None
+            };
+
+            // Validate CSRF token
+            if let Some(token) = csrf_token
+                && session_store.validate_csrf_token(&session_id, &token)
+            {
+                return next.run(req).await;
+            }
+
+            // CSRF validation failed or token missing for authenticated session
+            tracing::warn!(
+                "CSRF validation failed for session: {} method: {}",
+                session_id,
+                method
+            );
+
+            Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(axum::body::Body::from("CSRF token validation failed"))
+                .unwrap_or_else(|_| {
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(axum::body::Body::empty())
+                        .unwrap()
+                })
+        })
+    }
+}
+
 /// Session ID extracted from cookie
 #[derive(Clone, Debug)]
 pub struct SessionId(pub String);
@@ -190,112 +304,67 @@ where
     ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
         // Clone data we need from parts before moving into async block
         let session_id = parts.extensions.get::<SessionId>().cloned();
+        let session_store = parts.extensions.get::<Arc<SessionStore>>().cloned();
 
         async move {
-            // For now, return None - in production this would look up the session
-            // from the SessionStore which would need to be in app state
-            Ok(SessionExtractor {
-                session: session_id.map(|_| Session {
-                    id: String::new(),
-                    user_id: String::new(),
-                    created_at: Utc::now(),
-                    expires_at: Utc::now(),
-                    data: HashMap::new(),
-                }),
-            })
+            // SessionStore must always be available (injected by session middleware)
+            let Some(store) = session_store else {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "SessionStore not available in request extensions",
+                ));
+            };
+
+            // Look up session if session_id is present (user has session cookie)
+            let session = if let Some(sid) = session_id {
+                store.get_session(&sid.0)
+            } else {
+                None
+            };
+
+            Ok(SessionExtractor { session })
         }
     }
 }
 
-/// Set a session cookie in the response
-pub fn set_session_cookie(session_id: &str, expires_at: DateTime<Utc>) -> String {
+/// Set a session cookie in the response with security flags
+///
+/// The `secure` parameter controls whether to set the Secure flag (requires HTTPS).
+/// For local development over HTTP, set this to false.
+/// For production behind HTTPS or a reverse proxy with TLS termination, set this to true.
+pub fn set_session_cookie(session_id: &str, expires_at: DateTime<Utc>, secure: bool) -> String {
+    let secure_flag = if secure { " Secure;" } else { "" };
     format!(
-        "beemflow_session={}; Path=/; Expires={}; HttpOnly; SameSite=Lax",
+        "beemflow_session={}; Path=/; Expires={}; HttpOnly;{} SameSite=Lax",
         session_id,
-        expires_at.to_rfc2822()
+        expires_at.to_rfc2822(),
+        secure_flag
     )
 }
 
-/// Clear the session cookie
-pub fn clear_session_cookie() -> String {
-    "beemflow_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax".to_string()
+/// Clear the session cookie with security flags
+///
+/// The `secure` parameter should match what was used when setting the cookie.
+pub fn clear_session_cookie(secure: bool) -> String {
+    let secure_flag = if secure { " Secure;" } else { "" };
+    format!(
+        "beemflow_session=; Path=/; Max-Age=0; HttpOnly;{} SameSite=Lax",
+        secure_flag
+    )
 }
 
-/// Generate a secure random session ID
+/// Generate a secure random session ID (using cryptographically secure RNG)
 fn generate_session_id() -> String {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
-    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &bytes)
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
 }
 
-/// Generate a secure random token (for CSRF, etc.)
+/// Generate a secure random token for CSRF protection (using cryptographically secure RNG)
 fn generate_secure_token() -> String {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
-    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &bytes)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_create_session() {
-        let store = SessionStore::new();
-        let session = store.create_session("user123", Duration::hours(1));
-
-        assert_eq!(session.user_id, "user123");
-        assert!(session.expires_at > Utc::now());
-    }
-
-    #[tokio::test]
-    async fn test_get_session() {
-        let store = SessionStore::new();
-        let session = store.create_session("user123", Duration::hours(1));
-
-        let retrieved = store.get_session(&session.id);
-        assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().user_id, "user123");
-    }
-
-    #[tokio::test]
-    async fn test_update_session() {
-        let store = SessionStore::new();
-        let session = store.create_session("user123", Duration::hours(1));
-
-        let updated =
-            store.update_session(&session.id, "key".to_string(), serde_json::json!("value"));
-        assert!(updated);
-
-        let retrieved = store.get_session(&session.id).unwrap();
-        assert_eq!(
-            retrieved.data.get("key").unwrap(),
-            &serde_json::json!("value")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_csrf_token() {
-        let store = SessionStore::new();
-        let session = store.create_session("user123", Duration::hours(1));
-
-        let token = store.generate_csrf_token(&session.id).unwrap();
-        assert!(!token.is_empty());
-
-        assert!(store.validate_csrf_token(&session.id, &token));
-        assert!(!store.validate_csrf_token(&session.id, "invalid"));
-    }
-
-    #[tokio::test]
-    async fn test_delete_session() {
-        let store = SessionStore::new();
-        let session = store.create_session("user123", Duration::hours(1));
-
-        store.delete_session(&session.id);
-
-        let retrieved = store.get_session(&session.id);
-        assert!(retrieved.is_none());
-    }
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
 }

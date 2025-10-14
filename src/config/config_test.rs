@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::{Config, McpServerConfig, RegistryConfig};
+use crate::utils::expand_env_value;
 use std::fs;
 use tempfile::TempDir;
 

@@ -120,7 +120,10 @@ pub fn error_from_beemflow(err: crate::BeemFlowError) -> Response {
     let (status, message) = match err {
         BeemFlowError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
         BeemFlowError::Storage(e) => match e {
-            crate::error::StorageError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            crate::error::StorageError::NotFound { entity, id } => (
+                StatusCode::NOT_FOUND,
+                format!("{} not found: {}", entity, id),
+            ),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         },
         BeemFlowError::StepExecution { step_id, message } => (
@@ -135,30 +138,4 @@ pub fn error_from_beemflow(err: crate::BeemFlowError) -> Response {
     };
 
     write_http_error(message, status)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[tokio::test]
-    async fn test_write_http_error() {
-        let response = write_http_error("Test error", StatusCode::BAD_REQUEST);
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn test_write_http_json() {
-        let data = json!({"test": "value"});
-        let response = write_http_json(data);
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn test_write_http_json_indent() {
-        let data = json!({"test": "value"});
-        let response = write_http_json_indent(data);
-        assert_eq!(response.status(), StatusCode::OK);
-    }
 }

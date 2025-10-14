@@ -39,24 +39,28 @@ pub struct OAuthClientManager {
 
 impl OAuthClientManager {
     /// Create a new OAuth client manager
+    ///
+    /// Returns an error if the HTTP client cannot be built (e.g., TLS initialization failure)
     pub fn new(
         storage: Arc<dyn Storage>,
         registry_manager: Arc<RegistryManager>,
         redirect_uri: String,
-    ) -> Self {
+    ) -> Result<Self> {
         // Create HTTP client with security settings
         // Disable redirects to prevent authorization code interception
         let http_client = reqwest::ClientBuilder::new()
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .expect("Failed to build HTTP client for OAuth");
+            .map_err(|e| {
+                BeemFlowError::config(format!("Failed to build HTTP client for OAuth: {}", e))
+            })?;
 
-        Self {
+        Ok(Self {
             storage,
             registry_manager,
             redirect_uri,
             http_client,
-        }
+        })
     }
 
     /// Get OAuth provider from registry or storage
@@ -120,14 +124,22 @@ impl OAuthClientManager {
 
     /// Build authorization URL for a provider using oauth2 crate
     ///
-    /// Returns the URL to redirect the user to for authorization, along with
-    /// the state parameter that should be validated on callback.
+    /// Returns the URL to redirect the user to for authorization and the PKCE code verifier.
+    ///
+    /// # Parameters
+    /// * `custom_state` - Optional custom state to send to OAuth provider. If provided,
+    ///   this will be used instead of generating a random CSRF token. Use this to embed
+    ///   session IDs or other context in the state parameter.
+    ///
+    /// # Returns
+    /// `(auth_url, code_verifier)` - The caller is responsible for storing any CSRF tokens
     pub async fn build_auth_url(
         &self,
         provider_id: &str,
         scopes: &[&str],
         _integration: Option<&str>,
-    ) -> Result<(String, String, String)> {
+        custom_state: Option<String>,
+    ) -> Result<(String, String)> {
         // Get provider configuration from registry or storage
         let config = self.get_provider(provider_id).await?;
 
@@ -152,17 +164,27 @@ impl OAuthClientManager {
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
         // Build authorization URL with PKCE
-        let (auth_url, csrf_token) = client
-            .authorize_url(CsrfToken::new_random)
-            .add_scopes(scopes.iter().map(|s| Scope::new(s.to_string())))
-            .set_pkce_challenge(pkce_challenge)
-            .url();
+        // Use custom state if provided, otherwise generate random CSRF token
+        let auth_url = if let Some(custom) = custom_state {
+            // Use custom state (e.g., "{csrf_token}:{session_id}")
+            // The oauth2 crate's CsrfToken is just a wrapper around a string
+            let (url, _) = client
+                .authorize_url(|| CsrfToken::new(custom))
+                .add_scopes(scopes.iter().map(|s| Scope::new(s.to_string())))
+                .set_pkce_challenge(pkce_challenge)
+                .url();
+            url
+        } else {
+            // Generate random CSRF token (for flows that don't need custom state)
+            let (url, _) = client
+                .authorize_url(CsrfToken::new_random)
+                .add_scopes(scopes.iter().map(|s| Scope::new(s.to_string())))
+                .set_pkce_challenge(pkce_challenge)
+                .url();
+            url
+        };
 
-        Ok((
-            auth_url.to_string(),
-            csrf_token.secret().clone(),
-            pkce_verifier.secret().clone(),
-        ))
+        Ok((auth_url.to_string(), pkce_verifier.secret().clone()))
     }
 
     /// Exchange authorization code for access token using oauth2 crate
@@ -258,7 +280,7 @@ impl OAuthClientManager {
     ///     storage,
     ///     registry_manager,
     ///     "http://localhost:3000/oauth/callback".to_string()
-    /// );
+    /// )?;
     ///
     /// let token = client.get_token("google", "sheets").await?;
     /// println!("Access token: {}", token);
