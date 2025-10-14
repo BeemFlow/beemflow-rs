@@ -24,7 +24,7 @@ pub mod events {
         name = "publish_event",
         input = PublishInput,
         http = "POST /events",
-        cli = "publish <TOPIC> [--payload <JSON>]",
+        cli = "events publish <TOPIC> [--payload <JSON>]",
         description = "Publish an event"
     )]
     pub struct Publish {

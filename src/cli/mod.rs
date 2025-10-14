@@ -1,671 +1,344 @@
 //! Command-line interface for BeemFlow
 //!
-//! Provides the `flow` CLI tool that delegates all operations to the unified registry.
+//! Provides CLI access to all operations via auto-generated commands from metadata.
+//! Uses the same DRY approach as HTTP routes and MCP tools.
 
 use crate::Result;
-use crate::core::OperationRegistry;
-use crate::dsl::{Validator, parse_file};
-// TODO: Refactor cron
-// use crate::cron::CronManager;
 use crate::config::Config;
-use clap::{Parser as ClapParser, Subcommand};
+use crate::core::{OperationMetadata, OperationRegistry};
+use clap::{Arg, ArgAction, ArgMatches, Command};
+use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 
-#[derive(ClapParser)]
-#[command(name = "flow")]
-#[command(about = "BeemFlow - Workflow orchestration runtime", long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Run a flow from a YAML file
-    Run {
-        /// Path to flow file
-        file: String,
-
-        /// Event data as JSON
-        #[arg(long)]
-        event: Option<String>,
-
-        /// Run in draft mode
-        #[arg(long)]
-        draft: bool,
-    },
-
-    /// Validate a flow file
-    Validate {
-        /// Path to flow file
-        file: String,
-    },
-
-    /// List all flows
-    List,
-
-    /// Get a specific flow
-    Get {
-        /// Flow name
-        name: String,
-    },
-
-    /// Save a flow
-    Save {
-        /// Flow name
-        name: String,
-
-        /// Path to flow file
-        #[arg(long, short)]
-        file: Option<String>,
-    },
-
-    /// Delete a flow
-    Delete {
-        /// Flow name
-        name: String,
-    },
-
-    /// Deploy a flow to production
-    Deploy {
-        /// Flow name
-        name: String,
-    },
-
-    /// Rollback a flow to a specific version
-    Rollback {
-        /// Flow name
-        name: String,
-
-        /// Version to rollback to
-        version: String,
-    },
-
-    /// Show flow version history
-    History {
-        /// Flow name
-        name: String,
-    },
-
-    /// Generate Mermaid diagram for a flow
-    Graph {
-        /// Path to flow file
-        file: String,
-
-        /// Output file path (default: stdout)
-        #[arg(long, short)]
-        output: Option<String>,
-    },
-
-    /// Lint a flow file
-    Lint {
-        /// Path to flow file
-        file: String,
-    },
-
-    /// Run commands
-    #[command(subcommand)]
-    Runs(RunsCommands),
-
-    /// Tool commands
-    #[command(subcommand)]
-    Tools(ToolsCommands),
-
-    /// MCP commands
-    #[command(subcommand)]
-    Mcp(McpCommands),
-
-    /// Publish an event
-    Publish {
-        /// Topic name
-        topic: String,
-
-        /// Event payload as JSON
-        #[arg(long)]
-        payload: Option<String>,
-    },
-
-    /// Resume a paused run
-    Resume {
-        /// Resume token
-        token: String,
-
-        /// Event data as JSON
-        #[arg(long)]
-        event: Option<String>,
-    },
-
-    /// Show BeemFlow specification
-    Spec,
-
-    /// Run cron checks for scheduled workflows
-    Cron,
-
-    /// Start the HTTP server
-    Serve {
-        /// Host to bind to
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-
-        /// Port to bind to
-        #[arg(long, short, default_value_t = crate::constants::DEFAULT_HTTP_PORT)]
-        port: u16,
-    },
-}
-
-#[derive(Subcommand)]
-enum RunsCommands {
-    /// Start a new run
-    Start {
-        /// Flow name
-        flow_name: String,
-
-        /// Event data as JSON
-        #[arg(long)]
-        event: Option<String>,
-
-        /// Run draft version
-        #[arg(long)]
-        draft: bool,
-    },
-
-    /// Get run details
-    Get {
-        /// Run ID (UUID)
-        run_id: String,
-    },
-
-    /// List all runs
-    List,
-}
-
-#[derive(Subcommand)]
-enum ToolsCommands {
-    /// List all tools
-    List,
-
-    /// Get tool manifest
-    Get {
-        /// Tool name
-        name: String,
-    },
-
-    /// Search for tools
-    Search {
-        /// Search query
-        query: Option<String>,
-    },
-
-    /// Install a tool
-    Install {
-        /// Tool name from registry or path to manifest file
-        source: String,
-    },
-
-    /// Convert OpenAPI spec to BeemFlow tools
-    Convert {
-        /// Path to OpenAPI spec file
-        file: String,
-
-        /// API name prefix
-        #[arg(long)]
-        api_name: Option<String>,
-
-        /// Base URL override
-        #[arg(long)]
-        base_url: Option<String>,
-
-        /// Output file
-        #[arg(long, short)]
-        output: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-enum McpCommands {
-    /// List MCP servers
-    List,
-
-    /// Search MCP servers
-    Search {
-        /// Search query
-        query: Option<String>,
-    },
-
-    /// Install MCP server
-    Install {
-        /// Server name
-        name: String,
-    },
-
-    /// Start MCP server (expose BeemFlow as MCP tools)
-    Serve {
-        /// Use stdio transport (for Claude Desktop) - default
-        #[arg(long, default_value_t = true)]
-        stdio: bool,
-
-        /// Use HTTP transport at specified address
-        #[arg(long)]
-        http: Option<String>,
-    },
+/// Convert String to 'static str for CLI command building
+///
+/// This uses String::leak() which is appropriate for CLIs because:
+/// 1. Commands are built once at program startup
+/// 2. Program exits immediately after parsing (short-lived process)
+/// 3. OS reclaims all memory on exit
+/// 4. This is the standard Rust pattern for dynamic CLI generation with clap
+///
+/// Alternative approaches (and why they don't work here):
+/// - Static strings: Can't be used for dynamic metadata-driven commands
+/// - Owned storage: Clap's builder API requires 'static lifetime
+/// - Runtime API: Would require rewriting all command logic
+fn to_static_str(s: String) -> &'static str {
+    s.leak()
 }
 
 /// Create operation registry with dependencies
 async fn create_registry() -> Result<OperationRegistry> {
-    // Load configuration to get storage settings
     let config = Config::load_and_inject(crate::constants::CONFIG_FILE_NAME)?;
-
-    // Use centralized dependency creation from core module
     let deps = crate::core::create_dependencies(&config).await?;
-
     Ok(OperationRegistry::new(deps))
 }
 
+/// Main CLI entry point
 pub async fn run() -> Result<()> {
-    let cli = Cli::parse();
-
-    match cli.command {
-        Commands::Run {
-            file,
-            event,
-            draft: _,
-        } => {
-            run_flow(&file, event).await?;
-        }
-        Commands::Validate { file } => {
-            validate_flow(&file)?;
-        }
-        Commands::List => {
-            let registry = create_registry().await?;
-            let result = registry
-                .execute("list_flows", serde_json::json!({}))
-                .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        Commands::Get { name } => {
-            let registry = create_registry().await?;
-            let result = registry
-                .execute("get_flow", serde_json::json!({ "name": name }))
-                .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        Commands::Save { name, file } => {
-            let registry = create_registry().await?;
-            let content = if let Some(path) = file {
-                std::fs::read_to_string(path)?
-            } else {
-                return Err(crate::BeemFlowError::validation("--file is required"));
-            };
-            let result = registry
-                .execute(
-                    "save_flow",
-                    serde_json::json!({
-                        "name": name,
-                        "content": content
-                    }),
-                )
-                .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        Commands::Delete { name } => {
-            let registry = create_registry().await?;
-            let result = registry
-                .execute("delete_flow", serde_json::json!({ "name": name }))
-                .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        Commands::Deploy { name } => {
-            let registry = create_registry().await?;
-            let result = registry
-                .execute("deploy_flow", serde_json::json!({ "name": name }))
-                .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        Commands::Rollback { name, version } => {
-            let registry = create_registry().await?;
-            let result = registry
-                .execute(
-                    "rollback_flow",
-                    serde_json::json!({
-                        "name": name,
-                        "version": version
-                    }),
-                )
-                .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        Commands::History { name } => {
-            let registry = create_registry().await?;
-            let result = registry
-                .execute("flow_history", serde_json::json!({ "name": name }))
-                .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        Commands::Graph { file, output } => {
-            graph_flow(&file, output)?;
-        }
-        Commands::Lint { file } => {
-            let registry = create_registry().await?;
-            let result = registry
-                .execute("lint_flow", serde_json::json!({ "file": file }))
-                .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        Commands::Runs(runs_cmd) => {
-            let registry = create_registry().await?;
-            match runs_cmd {
-                RunsCommands::Start {
-                    flow_name,
-                    event,
-                    draft,
-                } => {
-                    let event_data: Option<HashMap<String, serde_json::Value>> =
-                        if let Some(json_str) = event {
-                            Some(serde_json::from_str(&json_str)?)
-                        } else {
-                            None
-                        };
-                    let result = registry
-                        .execute(
-                            "start_run",
-                            serde_json::json!({
-                                "flow_name": flow_name,
-                                "event": event_data,
-                                "draft": draft
-                            }),
-                        )
-                        .await?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-                RunsCommands::Get { run_id } => {
-                    let result = registry
-                        .execute("get_run", serde_json::json!({ "run_id": run_id }))
-                        .await?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-                RunsCommands::List => {
-                    let result = registry.execute("list_runs", serde_json::json!({})).await?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-            }
-        }
-        Commands::Tools(tools_cmd) => {
-            let registry = create_registry().await?;
-            match tools_cmd {
-                ToolsCommands::List => {
-                    let result = registry
-                        .execute("list_tools", serde_json::json!({}))
-                        .await?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-                ToolsCommands::Get { name } => {
-                    let result = registry
-                        .execute("get_tool_manifest", serde_json::json!({ "name": name }))
-                        .await?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-                ToolsCommands::Search { query } => {
-                    let result = registry
-                        .execute("search_tools", serde_json::json!({ "query": query }))
-                        .await?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-                ToolsCommands::Install { source } => {
-                    let result = registry
-                        .execute("install_tool", serde_json::json!({ "name": source }))
-                        .await?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-                ToolsCommands::Convert {
-                    file,
-                    api_name,
-                    base_url,
-                    output: _,
-                } => {
-                    let openapi_content = std::fs::read_to_string(file)?;
-                    let result = registry
-                        .execute(
-                            "convert_openapi",
-                            serde_json::json!({
-                                "openapi": openapi_content,
-                                "api_name": api_name,
-                                "base_url": base_url
-                            }),
-                        )
-                        .await?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-            }
-        }
-        Commands::Mcp(mcp_cmd) => {
-            let registry = create_registry().await?;
-            match mcp_cmd {
-                McpCommands::List => {
-                    let result = registry
-                        .execute("list_mcp_servers", serde_json::json!({}))
-                        .await?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-                McpCommands::Search { query } => {
-                    let result = registry
-                        .execute("search_mcp_servers", serde_json::json!({ "query": query }))
-                        .await?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-                McpCommands::Install { name } => {
-                    let result = registry
-                        .execute("install_mcp_server", serde_json::json!({ "name": name }))
-                        .await?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-                McpCommands::Serve { stdio, http: _ } => {
-                    if stdio {
-                        serve_mcp_stdio(registry).await?;
-                    } else {
-                        eprintln!("HTTP transport not yet implemented, use --stdio");
-                        std::process::exit(1);
-                    }
-                }
-            }
-        }
-        Commands::Publish { topic, payload } => {
-            let registry = create_registry().await?;
-            let payload_data: HashMap<String, serde_json::Value> = if let Some(json_str) = payload {
-                serde_json::from_str(&json_str)?
-            } else {
-                HashMap::new()
-            };
-            let result = registry
-                .execute(
-                    "publish_event",
-                    serde_json::json!({
-                        "topic": topic,
-                        "payload": payload_data
-                    }),
-                )
-                .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        Commands::Resume { token, event } => {
-            let registry = create_registry().await?;
-            let event_data: Option<HashMap<String, serde_json::Value>> =
-                if let Some(json_str) = event {
-                    Some(serde_json::from_str(&json_str)?)
-                } else {
-                    None
-                };
-            let result = registry
-                .execute(
-                    "resume_run",
-                    serde_json::json!({
-                        "token": token,
-                        "event": event_data
-                    }),
-                )
-                .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        Commands::Spec => {
-            let registry = create_registry().await?;
-            let result = registry.execute("spec", serde_json::json!({})).await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        Commands::Cron => {
-            run_cron_check().await?;
-        }
-        Commands::Serve { host, port } => {
-            serve_http(&host, port).await?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Run a flow from a file
-async fn run_flow(file: &str, event_json: Option<String>) -> Result<()> {
-    tracing::info!("Running flow from: {}", file);
-
-    // Parse flow
-    let flow = parse_file(file, None)?;
-
-    // Validate flow
-    Validator::validate(&flow)?;
-
-    // Parse event data
-    let event: HashMap<String, serde_json::Value> = if let Some(json) = event_json {
-        serde_json::from_str(&json)?
-    } else {
-        HashMap::new()
-    };
-
-    // Create registry with proper dependencies (including shared storage)
+    // Create registry for operation access
     let registry = create_registry().await?;
-    let engine = registry.get_dependencies().engine.clone();
-    let result = engine.execute(&flow, event).await?;
 
-    // Print outputs
-    println!("\n✅ Flow executed successfully");
-    println!("\nRun ID: {}", result.run_id);
-    println!("\nOutputs:");
-    for (step_id, output) in result.outputs {
-        println!("\n[{}]", step_id);
-        if let Ok(pretty) = serde_json::to_string_pretty(&output) {
-            println!("{}", pretty);
-        } else {
-            println!("{:?}", output);
+    // Build CLI from operation metadata (same pattern as HTTP/MCP use metadata)
+    let app = build_cli(&registry);
+    let matches = app.get_matches();
+
+    // Handle special commands (not operations)
+    match matches.subcommand() {
+        Some(("serve", sub_matches)) => {
+            let host = sub_matches.get_one::<String>("host").unwrap();
+            let port = sub_matches
+                .get_one::<String>("port")
+                .and_then(|s| s.parse::<u16>().ok())
+                .unwrap_or(crate::constants::DEFAULT_HTTP_PORT);
+            return serve_http(host, port).await;
+        }
+        Some(("cron", _)) => {
+            return run_cron_check().await;
+        }
+        Some(("mcp", sub_matches)) => {
+            if let Some(("serve", mcp_serve_matches)) = sub_matches.subcommand() {
+                let stdio = mcp_serve_matches.get_flag("stdio");
+                return serve_mcp(stdio).await;
+            }
+        }
+        _ => {}
+    }
+
+    // Try to dispatch to an operation (uses registry.execute() like MCP does)
+    if let Some((op_name, input)) = dispatch_to_operation(&matches, &registry)? {
+        let result = registry.execute(&op_name, input).await?;
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    // No command matched
+    eprintln!("No command specified. Use --help for usage information.");
+    std::process::exit(1);
+}
+
+// ============================================================================
+// CLI Building (from operation metadata)
+// ============================================================================
+
+/// Build CLI from operations metadata (same DRY principle as HTTP/MCP)
+fn build_cli(registry: &OperationRegistry) -> Command {
+    let mut app = Command::new("flow")
+        .about("BeemFlow - Workflow orchestration runtime")
+        .version(env!("CARGO_PKG_VERSION"));
+
+    // Add special commands that aren't operations
+    app = app
+        .subcommand(
+            Command::new("serve")
+                .about("Start the HTTP server")
+                .arg(
+                    Arg::new("host")
+                        .long("host")
+                        .default_value("127.0.0.1")
+                        .help("Host to bind to"),
+                )
+                .arg(
+                    Arg::new("port")
+                        .long("port")
+                        .short('p')
+                        .default_value("3330")
+                        .help("Port to bind to"),
+                ),
+        )
+        .subcommand(Command::new("cron").about("Run cron checks"));
+
+    // Build operation commands from metadata
+    add_operation_commands(app, registry)
+}
+
+/// Build commands from operation metadata (mirrors HTTP route generation)
+fn add_operation_commands(mut app: Command, registry: &OperationRegistry) -> Command {
+    let metadata = registry.get_all_metadata();
+
+    // Group operations by CLI structure
+    let mut grouped: HashMap<String, Vec<(&String, &OperationMetadata)>> = HashMap::new();
+
+    for (op_name, meta) in metadata {
+        if let Some(cli_pattern) = meta.cli_pattern {
+            let words: Vec<&str> = cli_pattern
+                .split_whitespace()
+                .take_while(|w| !w.starts_with('<') && !w.starts_with('['))
+                .collect();
+
+            let group = words.first().map(|s| s.to_string()).unwrap_or_default();
+            grouped.entry(group).or_default().push((op_name, meta));
         }
     }
 
-    Ok(())
-}
+    // Build subcommands for each group
+    for (group_name, ops) in grouped {
+        if group_name.is_empty() {
+            continue;
+        }
 
-/// Validate a flow file
-fn validate_flow(file: &str) -> Result<()> {
-    tracing::info!("Validating flow: {}", file);
+        // Use to_static_str to satisfy clap's 'static lifetime requirement
+        let group_name_static = to_static_str(group_name.clone());
+        let group_about = to_static_str(format!("{} operations", group_name));
+        let mut group_cmd = Command::new(group_name_static).about(group_about);
 
-    // Parse flow
-    let flow = parse_file(file, None)?;
+        for (op_name, meta) in ops {
+            if let Some(cli_pattern) = meta.cli_pattern {
+                // cli_pattern has 'static lifetime, so words do too
+                let words: Vec<&'static str> = cli_pattern.split_whitespace().collect();
+                let subcmd_name = words.get(1).copied().unwrap_or(words[0]);
 
-    // Validate flow
-    Validator::validate(&flow)?;
+                let cmd = build_operation_command(op_name, meta, subcmd_name);
+                group_cmd = group_cmd.subcommand(cmd);
+            }
+        }
 
-    println!("✅ Validation OK: flow is valid!");
+        // Add special "mcp serve" subcommand to the mcp group
+        if group_name == "mcp" {
+            group_cmd = group_cmd.subcommand(
+                Command::new("serve")
+                    .about("Start MCP server (expose BeemFlow as MCP tools)")
+                    .arg(
+                        Arg::new("stdio")
+                            .long("stdio")
+                            .action(ArgAction::SetTrue)
+                            .help("Use stdio transport (default)"),
+                    ),
+            );
+        }
 
-    Ok(())
-}
-
-/// Generate Mermaid diagram for a flow
-fn graph_flow(file: &str, output: Option<String>) -> Result<()> {
-    tracing::info!("Generating graph for: {}", file);
-
-    // Parse flow
-    let flow = parse_file(file, None)?;
-
-    // Generate diagram
-    let diagram = crate::graph::GraphGenerator::generate(&flow)?;
-
-    // Output
-    if let Some(output_path) = output {
-        std::fs::write(&output_path, diagram)?;
-        println!("✅ Graph written to: {}", output_path);
-    } else {
-        println!("{}", diagram);
+        app = app.subcommand(group_cmd);
     }
 
-    Ok(())
+    app
 }
 
-/// Serve HTTP API
+/// Build a clap Command for an operation using its schema
+fn build_operation_command(
+    _op_name: &str,
+    meta: &OperationMetadata,
+    cmd_name: &'static str,
+) -> Command {
+    let mut cmd = Command::new(cmd_name).about(meta.description);
+
+    // Extract field information from JSON schema
+    if let Some(properties) = meta.schema.get("properties").and_then(|p| p.as_object()) {
+        let required: Vec<&str> = meta
+            .schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+
+        let cli_pattern = meta.cli_pattern.unwrap_or("");
+        let mut positional_index = 1;
+
+        for (field_name, field_schema) in properties {
+            let is_required = required.contains(&field_name.as_str());
+            let field_type = field_schema
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("string");
+            let description = field_schema
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("");
+
+            // Check if this is a positional arg in the pattern
+            let is_positional = cli_pattern.contains(&format!("<{}>", field_name.to_uppercase()));
+
+            // Use to_static_str for clap's 'static lifetime requirement
+            let field_name_static = to_static_str(field_name.clone());
+            let description_static = to_static_str(description.to_string());
+
+            if is_positional {
+                cmd = cmd.arg(
+                    Arg::new(field_name_static)
+                        .required(is_required)
+                        .index(positional_index)
+                        .help(description_static),
+                );
+                positional_index += 1;
+            } else if field_type == "boolean" {
+                cmd = cmd.arg(
+                    Arg::new(field_name_static)
+                        .long(field_name_static)
+                        .action(ArgAction::SetTrue)
+                        .help(description_static),
+                );
+            } else {
+                cmd = cmd.arg(
+                    Arg::new(field_name_static)
+                        .long(field_name_static)
+                        .required(is_required)
+                        .help(description_static),
+                );
+            }
+        }
+    }
+
+    cmd
+}
+
+/// Dispatch CLI matches to operation (uses registry.execute() like MCP)
+fn dispatch_to_operation(
+    matches: &ArgMatches,
+    registry: &OperationRegistry,
+) -> Result<Option<(String, Value)>> {
+    let metadata = registry.get_all_metadata();
+
+    // Check for two-level subcommands (group subcmd)
+    if let Some((group, group_matches)) = matches.subcommand()
+        && let Some((subcmd, subcmd_matches)) = group_matches.subcommand()
+    {
+        let prefix = format!("{} {}", group, subcmd);
+
+        // Find matching operation
+        for (op_name, meta) in metadata {
+            if let Some(cli_pattern) = meta.cli_pattern
+                && cli_pattern.starts_with(&prefix)
+            {
+                let input = extract_input_from_matches(subcmd_matches, meta)?;
+                return Ok(Some((op_name.clone(), input)));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+/// Extract operation input from CLI arguments using schema
+fn extract_input_from_matches(matches: &ArgMatches, meta: &OperationMetadata) -> Result<Value> {
+    let mut input = serde_json::Map::new();
+
+    if let Some(properties) = meta.schema.get("properties").and_then(|p| p.as_object()) {
+        for (field_name, field_schema) in properties {
+            let field_type = field_schema
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("string");
+
+            if field_type == "boolean" {
+                if matches.get_flag(field_name.as_str()) {
+                    input.insert(field_name.clone(), serde_json::json!(true));
+                }
+            } else if let Some(value_str) = matches.get_one::<String>(field_name.as_str()) {
+                let parsed = match field_type {
+                    "integer" | "number" => value_str
+                        .parse::<i64>()
+                        .map(|n| serde_json::json!(n))
+                        .unwrap_or_else(|_| serde_json::json!(value_str)),
+                    "object" | "array" => serde_json::from_str(value_str)
+                        .unwrap_or_else(|_| serde_json::json!(value_str)),
+                    _ => serde_json::json!(value_str),
+                };
+                input.insert(field_name.clone(), parsed);
+            }
+        }
+    }
+
+    Ok(serde_json::json!(input))
+}
+
+// ============================================================================
+// Special Commands (not operations)
+// ============================================================================
+
+/// Start HTTP API server (special command - not an operation)
 async fn serve_http(host: &str, port: u16) -> Result<()> {
     println!("🚀 Starting BeemFlow HTTP server on {}:{}", host, port);
-    println!("   Press Ctrl+C to stop");
+    println!("   Access API at http://{}:{}", host, port);
+    println!("   Press Ctrl+C to stop\n");
 
-    // Create config
     let mut config = Config::default();
     config.http = Some(crate::config::HttpConfig {
         host: host.to_string(),
         port,
-        secure: false, // CLI defaults to insecure for local development
+        secure: false,
     });
 
-    // Start server
     crate::http::start_server(config).await?;
 
     Ok(())
 }
 
-/// Run cron check for scheduled workflows
-async fn run_cron_check() -> Result<()> {
-    // TODO: Refactor cron to use OperationRegistry
-    eprintln!("Cron functionality temporarily disabled during refactoring");
-    Ok(())
+/// Start MCP server (special command - not an operation)
+async fn serve_mcp(_stdio: bool) -> Result<()> {
+    println!("🚀 Starting BeemFlow MCP server");
+    println!("   Exposes BeemFlow operations as MCP tools");
+    println!("   Press Ctrl+C to stop\n");
 
-    /* Temporarily disabled - needs refactoring to use OperationRegistry
-    let _registry = create_registry().await?;
+    // Create registry and MCP server
+    let registry = create_registry().await?;
+    let mcp_server = crate::mcp::McpServer::new(std::sync::Arc::new(registry));
 
-    // Create cron manager with default settings
-    let server_url = "http://localhost:3000".to_string(); // Default for CLI usage
-    let cron_secret = None; // No secret for CLI usage
-
-    let cron_manager = CronManager::new(server_url, cron_secret);
-
-    // Run cron check
-    let result = cron_manager.check_and_execute_cron_flows().await?;
-
-    // Print results
-    println!("Cron check completed:");
-    println!("- Status: {}", result.status);
-    println!("- Timestamp: {}", result.timestamp);
-    println!("- Workflows checked: {}", result.checked);
-    println!("- Workflows triggered: {}", result.triggered);
-    println!("- Errors: {}", result.errors.len());
-
-    if !result.workflows.is_empty() {
-        println!("\nTriggered workflows:");
-        for workflow in &result.workflows {
-            println!("  - {}", workflow);
-        }
-    }
-
-    if !result.errors.is_empty() {
-        println!("\nErrors:");
-        for error in &result.errors {
-            println!("  - {}", error);
-        }
-    }
+    // Start MCP server on stdio
+    mcp_server.serve_stdio().await?;
 
     Ok(())
-    */
 }
 
-/// Start MCP server on stdio
-async fn serve_mcp_stdio(registry: OperationRegistry) -> Result<()> {
-    use crate::mcp::McpServer;
-
-    // MCP protocol requires ONLY JSON-RPC messages on stdout
-    // All diagnostic output is handled by tracing
-
-    let server = McpServer::new(Arc::new(registry));
-    server.serve_stdio().await
+/// Run cron check (special command - not an operation)
+async fn run_cron_check() -> Result<()> {
+    eprintln!("Cron functionality temporarily disabled during refactoring");
+    Ok(())
 }

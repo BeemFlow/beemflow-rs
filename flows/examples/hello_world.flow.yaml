@@ -1,4 +1,5 @@
 name: hello
+version: 1.0.0
 description: |
   Display a greeting message, then echo that same message again with additional text.
   Demonstrates basic step chaining and template variable usage.

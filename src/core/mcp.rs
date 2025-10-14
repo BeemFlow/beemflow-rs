@@ -34,17 +34,6 @@ pub mod mcp {
         pub name: String,
     }
 
-    #[derive(Deserialize, JsonSchema)]
-    #[schemars(description = "Input for starting an MCP server")]
-    pub struct ServeInput {
-        #[schemars(description = "Use stdio transport (default: false)")]
-        pub stdio: Option<bool>,
-        #[schemars(description = "HTTP server address (default: localhost:8080)")]
-        pub addr: Option<String>,
-        #[schemars(description = "Enable debug mode (default: false)")]
-        pub debug: Option<bool>,
-    }
-
     /// List MCP servers
     #[operation(
         name = "list_mcp_servers",
@@ -154,33 +143,6 @@ pub mod mcp {
                 "name": input.name,
                 "type": "mcp_server",
                 "command": server_entry.command
-            }))
-        }
-    }
-
-    /// Start MCP server for BeemFlow tools
-    #[operation(
-        name = "serve_mcp",
-        input = ServeInput,
-        cli = "mcp serve [--stdio] [--http <ADDR>]",
-        description = "Start MCP server (expose BeemFlow as MCP tools)"
-    )]
-    pub struct Serve {
-        pub deps: Arc<Dependencies>,
-    }
-
-    #[async_trait]
-    impl Operation for Serve {
-        type Input = ServeInput;
-        type Output = Value;
-
-        async fn execute(&self, input: Self::Input) -> Result<Self::Output> {
-            Ok(serde_json::json!({
-                "status": "success",
-                "stdio": input.stdio.unwrap_or(false),
-                "addr": input.addr.unwrap_or_else(|| "localhost:8080".to_string()),
-                "debug": input.debug.unwrap_or(false),
-                "message": "MCP server configuration accepted (server startup not implemented yet)"
             }))
         }
     }

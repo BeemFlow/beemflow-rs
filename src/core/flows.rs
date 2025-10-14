@@ -189,7 +189,7 @@ pub mod flows {
         name = "list_flows",
         input = EmptyInput,
         http = "GET /flows",
-        cli = "list",
+        cli = "flows list",
         description = "List all available workflow definitions"
     )]
     pub struct List {
@@ -213,7 +213,7 @@ pub mod flows {
         name = "get_flow",
         input = GetInput,
         http = "GET /flows/{name}",
-        cli = "get <NAME>",
+        cli = "flows get <NAME>",
         description = "Get a flow by name"
     )]
     pub struct Get {
@@ -247,7 +247,7 @@ pub mod flows {
         name = "save_flow",
         input = SaveInput,
         http = "POST /flows",
-        cli = "save <NAME> --file <FILE>",
+        cli = "flows save <NAME> --file <FILE>",
         description = "Save or update a flow definition"
     )]
     pub struct Save {
@@ -292,7 +292,7 @@ pub mod flows {
         name = "delete_flow",
         input = DeleteInput,
         http = "DELETE /flows/{name}",
-        cli = "delete <NAME>",
+        cli = "flows delete <NAME>",
         description = "Delete a flow definition"
     )]
     pub struct Delete {
@@ -320,7 +320,7 @@ pub mod flows {
         name = "deploy_flow",
         input = DeployInput,
         http = "POST /flows/{name}/deploy",
-        cli = "deploy <NAME>",
+        cli = "flows deploy <NAME>",
         description = "Deploy flow to production"
     )]
     pub struct Deploy {
@@ -367,7 +367,7 @@ pub mod flows {
         name = "rollback_flow",
         input = RollbackInput,
         http = "POST /flows/{name}/rollback",
-        cli = "rollback <NAME> <VERSION>",
+        cli = "flows rollback <NAME> <VERSION>",
         description = "Rollback flow to specific version"
     )]
     pub struct Rollback {
@@ -419,7 +419,7 @@ pub mod flows {
         name = "disable_flow",
         input = DisableInput,
         http = "POST /flows/{name}/disable",
-        cli = "disable <NAME>",
+        cli = "flows disable <NAME>",
         description = "Disable a flow from production"
     )]
     pub struct Disable {
@@ -466,7 +466,7 @@ pub mod flows {
         name = "enable_flow",
         input = EnableInput,
         http = "POST /flows/{name}/enable",
-        cli = "enable <NAME>",
+        cli = "flows enable <NAME>",
         description = "Enable a flow in production"
     )]
     pub struct Enable {
@@ -524,7 +524,7 @@ pub mod flows {
         name = "restore_flow",
         input = RestoreInput,
         http = "POST /flows/{name}/restore",
-        cli = "restore <NAME> [--version <VERSION>]",
+        cli = "flows restore <NAME> [--version <VERSION>]",
         description = "Restore a flow from deployment history to filesystem"
     )]
     pub struct Restore {
@@ -597,7 +597,7 @@ pub mod flows {
         name = "flow_history",
         input = HistoryInput,
         http = "GET /flows/{name}/history",
-        cli = "history <NAME>",
+        cli = "flows history <NAME>",
         description = "Get flow version history"
     )]
     pub struct History {
@@ -632,7 +632,7 @@ pub mod flows {
         name = "validate_flow",
         input = ValidateInput,
         http = "POST /flows/validate",
-        cli = "validate <FILE>",
+        cli = "flows validate <FILE>",
         description = "Validate a flow"
     )]
     pub struct Validate {
@@ -665,7 +665,7 @@ pub mod flows {
         name = "graph_flow",
         input = GraphInput,
         http = "POST /flows/graph",
-        cli = "graph <FILE> [--output <PATH>]",
+        cli = "flows graph <FILE> [--output <PATH>]",
         description = "Generate Mermaid diagram for a flow"
     )]
     pub struct Graph {
@@ -695,7 +695,7 @@ pub mod flows {
         name = "lint_flow",
         input = LintInput,
         http = "POST /flows/lint",
-        cli = "lint <FILE>",
+        cli = "flows lint <FILE>",
         description = "Lint a flow file"
     )]
     pub struct Lint {

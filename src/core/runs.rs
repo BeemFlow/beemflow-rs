@@ -115,7 +115,7 @@ pub mod runs {
     #[operation(
         name = "get_run",
         input = GetInput,
-        http = "GET /runs/{id}",
+        http = "GET /runs/{run_id}",
         cli = "runs get <RUN_ID>",
         description = "Get run details by ID"
     )]

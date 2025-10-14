@@ -15,7 +15,6 @@ use rmcp::{
     service::{RequestContext, RoleServer, ServiceExt},
 };
 use serde_json::Value;
-use std::borrow::Cow;
 use std::sync::Arc;
 
 /// MCP Server that exposes BeemFlow operations as tools
@@ -52,32 +51,22 @@ impl McpServer {
         Ok(())
     }
 
-    /// Auto-generate MCP tools from operation metadata
+    /// Auto-generate MCP tools from operation metadata using generated registration functions
     fn get_tools_list(&self) -> Vec<Tool> {
-        let metadata = self.operations.get_all_metadata();
+        let deps = self.operations.get_dependencies();
         let mut tools = Vec::new();
 
-        for (op_name, meta) in metadata {
-            // Create MCP tool name with beemflow_ prefix
-            let tool_name = format!("beemflow_{}", op_name);
-
-            // Use schema from operation metadata (auto-derived by macro)
-            let schema = meta.schema.clone();
-
-            let tool = Tool::new(
-                Cow::Owned(tool_name.clone()),
-                Cow::Owned(meta.description.to_string()),
-                Arc::new(schema),
-            );
-
-            tools.push(tool);
-
-            tracing::debug!(
-                "Auto-registered MCP tool: {} - {}",
-                tool_name,
-                meta.description
-            );
-        }
+        // Call generated registration functions from each operation group
+        tools.extend(crate::core::flows::flows::register_mcp_tools(deps.clone()));
+        tools.extend(crate::core::runs::runs::register_mcp_tools(deps.clone()));
+        tools.extend(crate::core::tools::tools::register_mcp_tools(deps.clone()));
+        tools.extend(crate::core::mcp::mcp::register_mcp_tools(deps.clone()));
+        tools.extend(crate::core::events::events::register_mcp_tools(
+            deps.clone(),
+        ));
+        tools.extend(crate::core::system::system::register_mcp_tools(
+            deps.clone(),
+        ));
 
         // Sort tools by name for consistent output
         tools.sort_by(|a, b| a.name.cmp(&b.name));

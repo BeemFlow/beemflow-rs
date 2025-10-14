@@ -19,10 +19,10 @@ use crate::core::OperationRegistry;
 use crate::{BeemFlowError, Result};
 use axum::{
     Router,
-    extract::{Json, Path as AxumPath, State},
+    extract::{Json, Path as AxumPath},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::get,
 };
 use parking_lot::RwLock;
 use serde_json::{Value, json};
@@ -35,9 +35,6 @@ use tower_http::{
     cors::CorsLayer,
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
-
-/// Maximum request body size (10MB) - prevents memory exhaustion attacks
-const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -156,6 +153,8 @@ pub async fn start_server(config: Config) -> Result<()> {
 
     // Use centralized dependency creation from core module
     let dependencies = crate::core::create_dependencies(&config).await?;
+
+    // Create registry (takes ownership, so we clone dependencies to keep using them below)
     let registry = Arc::new(OperationRegistry::new(dependencies.clone()));
 
     // Create session store
@@ -235,97 +234,27 @@ pub async fn start_server(config: Config) -> Result<()> {
     Ok(())
 }
 
-/// Auto-generate routes from operation metadata
-fn build_operation_routes(state: &AppState) -> Router<AppState> {
-    use axum::body::Body;
-    use axum::extract::Request;
+/// Auto-generate routes from operation metadata using macro-generated registration functions
+fn build_operation_routes(state: &AppState) -> Router {
+    let deps = state.registry.get_dependencies();
 
-    let mut router = Router::new();
-    let metadata = state.registry.get_all_metadata();
-
-    for (op_name, meta) in metadata {
-        // Skip operations without HTTP endpoints
-        let (Some(method), Some(path)) = (meta.http_method, meta.http_path) else {
-            continue;
-        };
-
-        let op_name_for_handler = op_name.clone();
-        let op_name_for_log = op_name.clone();
-        let path_template = path.to_string();
-        let path_for_log = path.to_string();
-        let method_for_log = method.to_string();
-
-        // Create a universal handler that works with any operation
-        let handler = move |State(state): State<AppState>, req: Request<Body>| {
-            let op_name = op_name_for_handler.clone();
-            let path_template = path_template.clone();
-
-            async move {
-                // Extract path parameters by comparing URI with template
-                let uri = req.uri().path();
-                let mut input = json!({});
-
-                // Parse path parameters from URI
-                let path_parts: Vec<&str> =
-                    path_template.split('/').filter(|s| !s.is_empty()).collect();
-                let uri_parts: Vec<&str> = uri.split('/').filter(|s| !s.is_empty()).collect();
-
-                if path_parts.len() == uri_parts.len() {
-                    for (template_part, uri_part) in path_parts.iter().zip(uri_parts.iter()) {
-                        if template_part.starts_with('{') && template_part.ends_with('}') {
-                            let param_name = &template_part[1..template_part.len() - 1];
-                            if let Some(obj) = input.as_object_mut() {
-                                obj.insert(param_name.to_string(), json!(uri_part));
-                            }
-                        }
-                    }
-                }
-
-                // Try to read JSON body if present (with size limit to prevent DoS)
-                let bytes = axum::body::to_bytes(req.into_body(), MAX_BODY_SIZE)
-                    .await
-                    .unwrap_or_default();
-                if !bytes.is_empty()
-                    && let Ok(body_json) = serde_json::from_slice::<Value>(&bytes)
-                    && let Some(obj) = input.as_object_mut()
-                    && let Some(body_obj) = body_json.as_object()
-                {
-                    for (k, v) in body_obj {
-                        obj.insert(k.clone(), v.clone());
-                    }
-                }
-
-                let result = state.registry.execute(&op_name, input).await?;
-                Ok::<Json<Value>, AppError>(Json(result))
-            }
-        };
-
-        // Add route based on method
-        router = match method {
-            "GET" => router.route(path, get(handler)),
-            "POST" => router.route(path, post(handler)),
-            "DELETE" => router.route(path, delete(handler)),
-            "PUT" => router.route(path, axum::routing::put(handler)),
-            "PATCH" => router.route(path, axum::routing::patch(handler)),
-            _ => {
-                tracing::warn!(
-                    "Unsupported HTTP method '{}' for operation '{}'",
-                    method,
-                    &op_name_for_log
-                );
-                router
-            }
-        };
-
-        tracing::debug!(
-            "Auto-registered route: {} {} -> {}",
-            method_for_log,
-            path_for_log,
-            op_name_for_log
-        );
-    }
-
-    router
+    // Use generated registration functions from each operation group
+    // These functions call the http_route() method on each operation
+    Router::new()
+        .merge(crate::core::flows::flows::register_http_routes(
+            deps.clone(),
+        ))
+        .merge(crate::core::runs::runs::register_http_routes(deps.clone()))
+        .merge(crate::core::tools::tools::register_http_routes(
+            deps.clone(),
+        ))
+        .merge(crate::core::mcp::mcp::register_http_routes(deps.clone()))
+        .merge(crate::core::events::events::register_http_routes(
+            deps.clone(),
+        ))
+        .merge(crate::core::system::system::register_http_routes(
+            deps.clone(),
+        ))
 }
 
 /// Build the router with all endpoints
@@ -353,15 +282,14 @@ fn build_router(
     // Build auto-generated operation routes from metadata
     let operation_routes = build_operation_routes(&state);
 
-    // Build AppState-based routes for system endpoints
+    // Build application routes (system endpoints + operation routes)
+    // Note: health_handler and metrics_handler don't use AppState, so we merge everything first
     let app_routes = Router::new()
         // System endpoints (special handlers not in operation registry)
         .route("/healthz", get(health_handler))
         .route("/metrics", get(metrics_handler))
         // Merge auto-generated operation routes
-        .merge(operation_routes)
-        // Add state to AppState routes
-        .with_state(state);
+        .merge(operation_routes);
 
     // Merge all routes together
 

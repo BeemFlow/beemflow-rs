@@ -79,6 +79,27 @@ pub fn operation_group(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
 
+    // Generate HTTP route registration function
+    let http_route_calls = operation_structs.iter().map(|struct_name| {
+        quote! {
+            router = router.merge(#struct_name::http_route(deps.clone()));
+        }
+    });
+
+    // Generate MCP tool registration function
+    let mcp_tool_calls = operation_structs.iter().map(|struct_name| {
+        quote! {
+            {
+                let tool = rmcp::model::Tool::new(
+                    std::borrow::Cow::Owned(format!("beemflow_{}", #struct_name::OPERATION_NAME)),
+                    std::borrow::Cow::Owned(#struct_name::DESCRIPTION.to_string()),
+                    std::sync::Arc::new(#struct_name::metadata().schema),
+                );
+                tools.push(tool);
+            }
+        }
+    });
+
     // Pass through the module with added metadata and auto-registration
     let expanded = quote! {
         #vis mod #mod_name {
@@ -92,6 +113,20 @@ pub fn operation_group(attr: TokenStream, item: TokenStream) -> TokenStream {
                 deps: std::sync::Arc<super::Dependencies>,
             ) {
                 #(#registration_calls)*
+            }
+
+            /// Auto-generated function to register HTTP routes for all operations in this group
+            pub fn register_http_routes(deps: std::sync::Arc<super::Dependencies>) -> axum::Router {
+                let mut router = axum::Router::new();
+                #(#http_route_calls)*
+                router
+            }
+
+            /// Auto-generated function to register MCP tools for all operations in this group
+            pub fn register_mcp_tools(deps: std::sync::Arc<super::Dependencies>) -> Vec<rmcp::model::Tool> {
+                let mut tools = Vec::new();
+                #(#mcp_tool_calls)*
+                tools
             }
         }
     };
@@ -185,6 +220,130 @@ fn parse_http_route(http: &str) -> (String, String) {
     }
 }
 
+/// Extract path parameters from a path template like "/flows/{name}/runs/{run_id}"
+/// Returns vec of parameter names like ["name", "run_id"]
+fn extract_path_params(path: &str) -> Vec<String> {
+    path.split('/')
+        .filter_map(|segment| {
+            if segment.starts_with('{') && segment.ends_with('}') {
+                Some(segment[1..segment.len() - 1].to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Generate HTTP route method for an operation
+fn generate_http_route_method(
+    http_method: &str,
+    http_path: &str,
+    input_type: &Option<Ident>,
+) -> proc_macro2::TokenStream {
+    use proc_macro2::Span;
+
+    let path_params = extract_path_params(http_path);
+    let method_lower = http_method.to_lowercase();
+    let method_ident = Ident::new(&method_lower, Span::call_site());
+
+    // Generate axum extractor and input construction
+    // Strategy: Use JSON body for POST/PUT/PATCH with path params merged in
+    let (extractors, input_construction) = if let Some(input_ty) = input_type {
+        if path_params.is_empty() {
+            // No path params - simple case
+            if http_method == "GET" || http_method == "DELETE" {
+                // For GET/DELETE, use Query params
+                (
+                    quote! { axum::extract::Query(input): axum::extract::Query<#input_ty> },
+                    quote! { input },
+                )
+            } else {
+                // For POST/PUT/PATCH, use JSON body
+                (
+                    quote! { axum::extract::Json(input): axum::extract::Json<#input_ty> },
+                    quote! { input },
+                )
+            }
+        } else if path_params.len() == 1 && (http_method == "GET" || http_method == "DELETE") {
+            // Single path param with GET/DELETE - construct input from path param only
+            let param = &path_params[0];
+            let param_ident = Ident::new(param, Span::call_site());
+            (
+                quote! {
+                    axum::extract::Path(#param_ident): axum::extract::Path<String>
+                },
+                quote! {
+                    #input_ty { #param_ident }
+                },
+            )
+        } else {
+            // Path params with POST/PUT/PATCH - merge path params with JSON body
+            // This handles cases like POST /flows/{name}/rollback with body containing other fields
+            let param_idents: Vec<_> = path_params
+                .iter()
+                .map(|p| Ident::new(p, Span::call_site()))
+                .collect();
+
+            let extractor = if path_params.len() == 1 {
+                let param = &param_idents[0];
+                quote! {
+                    axum::extract::Path(#param): axum::extract::Path<String>,
+                    axum::extract::Json(mut body): axum::extract::Json<serde_json::Value>
+                }
+            } else {
+                let param_types = vec![quote! { String }; path_params.len()];
+                quote! {
+                    axum::extract::Path((#(#param_idents),*)): axum::extract::Path<(#(#param_types),*)>,
+                    axum::extract::Json(mut body): axum::extract::Json<serde_json::Value>
+                }
+            };
+
+            // Merge path params into body JSON
+            let merge_params = path_params.iter().map(|p| {
+                let param_ident = Ident::new(p, Span::call_site());
+                quote! {
+                    if let Some(obj) = body.as_object_mut() {
+                        obj.insert(#p.to_string(), serde_json::json!(#param_ident));
+                    }
+                }
+            });
+
+            (
+                extractor,
+                quote! {
+                    {
+                        #(#merge_params)*
+                        serde_json::from_value::<#input_ty>(body)
+                            .map_err(|e| crate::http::AppError::from(
+                                crate::BeemFlowError::validation(format!("Invalid input: {}", e))
+                            ))?
+                    }
+                },
+            )
+        }
+    } else {
+        // No input type
+        (quote! {}, quote! { () })
+    };
+
+    quote! {
+        /// Auto-generated HTTP route registration for this operation
+        pub fn http_route(deps: std::sync::Arc<super::Dependencies>) -> axum::Router {
+            axum::Router::new().route(
+                Self::HTTP_PATH.unwrap(),
+                axum::routing::#method_ident({
+                    move |#extractors| async move {
+                        let op = Self::new(deps.clone());
+                        let result = op.execute(#input_construction).await
+                            .map_err(|e| crate::http::AppError::from(e))?;
+                        Ok::<axum::Json<_>, crate::http::AppError>(axum::Json(result))
+                    }
+                })
+            )
+        }
+    }
+}
+
 /// Attribute macro for individual operations
 ///
 /// Usage: #[operation(name = "get_flow", http = "GET /flows/{name}", cli = "get <NAME>")]
@@ -227,12 +386,27 @@ pub fn operation(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
 
-    // Parse HTTP metadata
-    let (http_method, http_path) = if let Some(http) = args.http {
-        let (method, path) = parse_http_route(&http);
-        (quote! { Some(#method) }, quote! { Some(#path) })
+    // Parse HTTP metadata and generate helper method
+    let (http_method_const, http_path_const, http_route_method) = if let Some(http) = &args.http {
+        let (method, path) = parse_http_route(http);
+        let http_method_helper = generate_http_route_method(&method, &path, &args.input);
+        (
+            quote! { Some(#method) },
+            quote! { Some(#path) },
+            http_method_helper,
+        )
     } else {
-        (quote! { None }, quote! { None })
+        // Generate empty http_route method if no HTTP metadata
+        (
+            quote! { None },
+            quote! { None },
+            quote! {
+                /// No HTTP route defined for this operation
+                pub fn http_route(_deps: std::sync::Arc<super::Dependencies>) -> axum::Router {
+                    axum::Router::new()
+                }
+            },
+        )
     };
 
     // CLI metadata
@@ -248,6 +422,9 @@ pub fn operation(attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         quote! { GROUP_NAME }
     };
+
+    // Note: MCP tool generation will be done in operation_group macro
+    // to avoid import issues with rmcp types
 
     // Generate schema from Input type if provided, with OnceLock caching
     let schema_generation = if let Some(input_type) = args.input {
@@ -293,7 +470,7 @@ pub fn operation(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
-    // Generate operation metadata
+    // Generate operation metadata and helper methods
     let expanded = quote! {
         #[derive(Clone)]
         #(#attrs)*
@@ -303,13 +480,16 @@ pub fn operation(attr: TokenStream, item: TokenStream) -> TokenStream {
             pub const OPERATION_NAME: &'static str = #operation_name;
             pub const DESCRIPTION: &'static str = #description;
             pub const GROUP: &'static str = #group_value;
-            pub const HTTP_METHOD: Option<&'static str> = #http_method;
-            pub const HTTP_PATH: Option<&'static str> = #http_path;
+            pub const HTTP_METHOD: Option<&'static str> = #http_method_const;
+            pub const HTTP_PATH: Option<&'static str> = #http_path_const;
             pub const CLI_PATTERN: Option<&'static str> = #cli_pattern;
 
             pub fn new(deps: std::sync::Arc<super::Dependencies>) -> Self {
                 Self { deps }
             }
+
+            // Auto-generated helper methods
+            #http_route_method
         }
 
         impl super::super::HasMetadata for #struct_name {

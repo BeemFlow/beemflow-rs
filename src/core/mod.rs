@@ -75,7 +75,10 @@ trait OperationExecutor: Send + Sync {
 
 impl OperationRegistry {
     pub fn new(dependencies: Dependencies) -> Self {
+        // Arc Dependencies once for sharing with all operations
+        // Note: Dependencies already contains Arc'd fields, so this is cheap to clone
         let deps = Arc::new(dependencies);
+
         let mut registry = Self {
             operations: HashMap::new(),
             metadata: HashMap::new(),
@@ -83,6 +86,7 @@ impl OperationRegistry {
         };
 
         // Auto-register all operations by group
+        // The macro-generated register_all functions expect Arc<Dependencies>
         flows::flows::register_all(&mut registry, deps.clone());
         runs::runs::register_all(&mut registry, deps.clone());
         events::events::register_all(&mut registry, deps.clone());
@@ -202,6 +206,9 @@ async fn load_flow_from_config(
 /// CLI, HTTP, and MCP interfaces. All presentation layers should use this
 /// function to ensure consistent dependency configuration.
 pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
+    // Arc config once at the start - all callers will reuse this Arc
+    let config = Arc::new(config.clone());
+
     // Create storage from config
     let storage = crate::storage::create_storage_from_config(&config.storage).await?;
 
@@ -238,13 +245,13 @@ pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
     ));
 
     // Create registry manager with standard sources
-    let registry_manager = Arc::new(RegistryManager::standard(Some(config)));
+    let registry_manager = Arc::new(RegistryManager::standard(Some(&config)));
 
     Ok(Dependencies {
         storage,
         engine,
         registry_manager,
         event_bus,
-        config: Arc::new(config.clone()),
+        config,
     })
 }
