@@ -214,7 +214,11 @@ fn build_operation_command(
                 .unwrap_or("");
 
             // Check if this is a positional arg in the pattern
-            let is_positional = cli_pattern.contains(&format!("<{}>", field_name.to_uppercase()));
+            // It's positional if it appears as <FIELD> but NOT as --flag <FIELD>
+            let uppercase_field = format!("<{}>", field_name.to_uppercase());
+            let flag_pattern = format!("--{} {}", field_name, uppercase_field);
+            let is_positional =
+                cli_pattern.contains(&uppercase_field) && !cli_pattern.contains(&flag_pattern);
 
             // Use to_static_str for clap's 'static lifetime requirement
             let field_name_static = to_static_str(field_name.clone());

@@ -55,58 +55,43 @@ examples:
 		echo "  - $$flow"; \
 	done
 
+integration:
+	@echo "🧪 Running integration tests..."
+	cargo test --test integration_test
+
 e2e:
 	@echo "🧪 Running end-to-end tests (via CLI)..."
 	@echo "Building release binary first..."
 	@cargo build --release
-	@echo "These flows are functional and should run with proper .env configuration"
 	@echo ""
-	@mkdir -p /tmp/beemflow-e2e
 	@failed=0; \
-	for flow in $(E2E_FLOWS); do \
-		timestamp=$$(date +%s); \
+	for flow in $(E2E_FLOWS) $(INTEGRATION_FLOWS); do \
 		flow_name=$$(basename $$flow .flow.yaml); \
-		echo "▶ Running $$flow (name: $$flow_name)"; \
-		$(RELEASE_BINARY) flows save $$flow_name --file $$flow > /dev/null; \
-		if ! $(RELEASE_BINARY) runs start $$flow_name --draft --event "{\"timestamp\":\"$$timestamp\"}"; then \
-			echo "  ❌ Flow failed"; \
-			failed=$$((failed + 1)); \
-		fi; \
-		echo ""; \
-	done; \
-	if [ $$failed -gt 0 ]; then \
-		echo "❌ E2E tests failed: $$failed flow(s) failed"; \
-		exit 1; \
-	fi
-	@echo "✅ E2E tests complete!"
-
-integration:
-	@echo "🧪 Running integration tests..."
-	cargo test --test integration_test
-	@failed=0; \
-	for flow in $(INTEGRATION_FLOWS); do \
-		timestamp=$$(date +%s%N); \
-		flow_name=$$(basename $$flow .flow.yaml); \
-		echo "Running $$flow (name: $$flow_name)"; \
-		cargo run --release -- flows save $$flow_name --file $$flow > /dev/null; \
+		echo "Running $$flow"; \
 		if echo "$$flow" | grep -q "circular_dependencies"; then \
-			if cargo run --release -- runs start $$flow_name --draft --event "{\"timestamp\":\"$$timestamp\"}" 2>&1 | grep -q "Circular dependency"; then \
-				echo "  ✓ Flow correctly detected circular dependency"; \
+			if $(RELEASE_BINARY) flows save $$flow_name --file $$flow 2>&1 | grep -q "Circular dependency"; then \
+				echo "  ✓ Correctly detected circular dependency"; \
 			else \
-				echo "  ❌ Flow should have detected circular dependency"; \
+				echo "  ❌ Should have detected circular dependency"; \
 				failed=$$((failed + 1)); \
 			fi; \
 		else \
-			if ! cargo run --release -- runs start $$flow_name --draft --event "{\"timestamp\":\"$$timestamp\"}"; then \
-				echo "  ❌ Flow $$flow failed"; \
+			$(RELEASE_BINARY) flows save $$flow_name --file $$flow > /dev/null 2>&1; \
+			if ! $(RELEASE_BINARY) runs start $$flow_name --draft 2>&1 | grep -q "completed"; then \
+				echo "  ❌ Failed"; \
 				failed=$$((failed + 1)); \
+			else \
+				echo "  ✓ Passed"; \
 			fi; \
 		fi; \
 	done; \
 	if [ $$failed -gt 0 ]; then \
-		echo "❌ Integration tests failed: $$failed flow(s) failed"; \
+		echo ""; \
+		echo "❌ E2E tests failed: $$failed flow(s) failed"; \
 		exit 1; \
-	fi
+	fi; \
+	echo ""; \
+	echo "✅ All E2E tests passed!"
 
 # Full test suite (unit + integration + e2e CLI tests)
 test-all: test integration e2e
