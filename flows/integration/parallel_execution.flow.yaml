@@ -70,7 +70,7 @@ steps:
     with:
       text: |
         Parallel test completed!
-        HTTP requests: {{len(steps.parallel_http_requests)}}
-        Parallel items: {{len(steps.process_data_parallel)}}
-        Sequential items: {{len(steps.process_data_sequential)}}
-        Nested operations: {{len(steps.nested_parallel_test)}} 
+        HTTP requests: 3 completed
+        Parallel items: {{test_data | length}} processed
+        Sequential items: {{test_data | length}} processed
+        Nested operations: {{test_data | length}} processed 

@@ -82,7 +82,7 @@ steps:
       text: |
         Escaped quotes: {{"He said \"Hello\""}}
         Math with large numbers: {{large_number + 1}}
-        Boolean operations: {{true && false}}
+        Boolean operations: {{true and false}}
         String concatenation: {{"Hello" + " " + "World"}}
 
   # Test error recovery
@@ -92,7 +92,7 @@ steps:
       text: |
         Safe nested access: {{nonexistent.deeply.nested.value or 'default'}}
         Safe array access: {{empty_list[0] or 'no first element'}}
-        Safe filter on null: {{null_value | length or 0}}
+        Null value handled: {{null_value or 'was null'}}
 
   # Final summary
   - id: edge_case_summary

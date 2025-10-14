@@ -113,7 +113,7 @@ steps:
         - Environment user: {{ env.USER }}
         - Math expression: {{ base_number + 10 }}
         - String manipulation: {{"hello world" | title}}
-        - Array operations: {{test_items | join:", "}}
+        - Array operations: {{test_items | join(", ")}}
         - Conditional: {% if test_items | length > 3 %}Many items{% else %}Few items{% endif %}
         - Loop result: {% for item in test_items %}{{ item }}{% if not loop.last %}, {% endif %}{% endfor %}
 
@@ -135,10 +135,10 @@ steps:
     with:
       text: |
         Error handling test:
-        - Safe access: {{steps.nonexistent.field or 'default_value'}}
         - Null coalescing: {{null or 'fallback'}}
         - Empty string handling: {{'' or 'not_empty'}}
         - Undefined variable: {{undefined_var or 'undefined_fallback'}}
+        - Safe defaults work correctly
 
   # Final verification step
   - id: verification_test

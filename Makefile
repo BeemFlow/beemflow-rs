@@ -84,10 +84,20 @@ integration:
 	cargo test --test flows_integration_test
 	@failed=0; \
 	for flow in $(INTEGRATION_FLOWS); do \
+		timestamp=$$(date +%s%N); \
 		echo "Running $$flow"; \
-		if ! cargo run --release -- run $$flow; then \
-			echo "  ❌ Flow $$flow failed"; \
-			failed=$$((failed + 1)); \
+		if echo "$$flow" | grep -q "circular_dependencies"; then \
+			if cargo run --release -- run --event "{\"timestamp\":\"$$timestamp\"}" $$flow 2>&1 | grep -q "Circular dependency"; then \
+				echo "  ✓ Flow correctly detected circular dependency"; \
+			else \
+				echo "  ❌ Flow should have detected circular dependency"; \
+				failed=$$((failed + 1)); \
+			fi; \
+		else \
+			if ! cargo run --release -- run --event "{\"timestamp\":\"$$timestamp\"}" $$flow; then \
+				echo "  ❌ Flow $$flow failed"; \
+				failed=$$((failed + 1)); \
+			fi; \
 		fi; \
 	done; \
 	if [ $$failed -gt 0 ]; then \
