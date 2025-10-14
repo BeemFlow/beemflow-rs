@@ -3,13 +3,6 @@
 use super::*;
 
 #[test]
-fn test_shell_quote() {
-    assert_eq!(shell_quote("simple"), "'simple'");
-    assert_eq!(shell_quote("with'quote"), "'with'\\''quote'");
-    assert_eq!(shell_quote("multiple'quotes'here"), "'multiple'\\''quotes'\\''here'");
-}
-
-#[test]
 fn test_has_schedule_cron_trigger() {
     let flow = Flow {
         cron: Some("0 * * * *".to_string()),

@@ -165,10 +165,3 @@ impl Default for CronExecutionResult {
     }
 }
 
-/// Shell quote utility for safe shell command construction
-pub fn shell_quote(s: &str) -> String {
-    // Replace single quotes with '\'' (end quote, escaped quote, start quote)
-    let escaped = s.replace('\'', "'\\''");
-    // Wrap in single quotes
-    format!("'{}'", escaped)
-}

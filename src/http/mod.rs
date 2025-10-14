@@ -3,7 +3,6 @@
 //! Provides REST API for all BeemFlow operations with complete parity
 //! with CLI and MCP interfaces.
 
-pub mod response;
 pub mod session;
 pub mod template;
 pub mod webhook;
@@ -415,8 +414,6 @@ async fn metrics_handler() -> std::result::Result<(StatusCode, String), AppError
 
 #[cfg(test)]
 mod http_test;
-#[cfg(test)]
-mod response_test;
 #[cfg(test)]
 mod session_test;
 #[cfg(test)]
