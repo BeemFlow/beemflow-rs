@@ -166,7 +166,7 @@ impl RegistryManager {
         let providers: Vec<RegistryEntry> = all_servers
             .into_iter()
             .filter(|e| e.entry_type == "oauth_provider")
-            .map(super::default::expand_oauth_provider_env_vars)
+            .filter_map(super::default::expand_oauth_provider_env_vars)
             .collect();
         Ok(providers)
     }
@@ -188,15 +188,22 @@ impl RegistryManager {
 
             if entry.entry_type == "oauth_provider" {
                 tracing::debug!("Entry is oauth_provider, expanding env vars for '{}'", name);
-                let expanded = super::default::expand_oauth_provider_env_vars(entry);
-                let has_expanded_client_id = expanded.client_id.is_some();
-                let has_expanded_client_secret = expanded.client_secret.is_some();
-                tracing::debug!(
-                    "After expansion: has_client_id={}, has_client_secret={}",
-                    has_expanded_client_id,
-                    has_expanded_client_secret
-                );
-                return Ok(Some(expanded));
+                match super::default::expand_oauth_provider_env_vars(entry) {
+                    Some(expanded) => {
+                        let has_expanded_client_id = expanded.client_id.is_some();
+                        let has_expanded_client_secret = expanded.client_secret.is_some();
+                        tracing::debug!(
+                            "After expansion: has_client_id={}, has_client_secret={}",
+                            has_expanded_client_id,
+                            has_expanded_client_secret
+                        );
+                        return Ok(Some(expanded));
+                    }
+                    None => {
+                        tracing::debug!("Provider '{}' skipped due to missing env vars", name);
+                        return Ok(None);
+                    }
+                }
             } else {
                 tracing::warn!(
                     "Entry '{}' is not an oauth_provider (type={})",

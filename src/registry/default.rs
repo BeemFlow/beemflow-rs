@@ -44,7 +44,7 @@ impl DefaultRegistry {
         let providers: Vec<RegistryEntry> = entries
             .into_iter()
             .filter(|e| e.entry_type == "oauth_provider")
-            .map(expand_oauth_provider_env_vars)
+            .filter_map(expand_oauth_provider_env_vars)
             .collect();
         Ok(providers)
     }
@@ -63,35 +63,48 @@ impl Default for DefaultRegistry {
 }
 
 /// Expand environment variables in OAuth provider configuration
-pub fn expand_oauth_provider_env_vars(mut entry: RegistryEntry) -> RegistryEntry {
+/// Returns None if any required environment variables are missing
+pub fn expand_oauth_provider_env_vars(mut entry: RegistryEntry) -> Option<RegistryEntry> {
+    let mut missing_vars = Vec::new();
+
     if let Some(ref client_id) = entry.client_id {
-        entry.client_id = Some(expand_env_value(client_id));
+        match expand_env_value_checked(client_id) {
+            Ok(val) => entry.client_id = Some(val),
+            Err(var_name) => missing_vars.push(var_name),
+        }
     }
+
     if let Some(ref client_secret) = entry.client_secret {
-        entry.client_secret = Some(expand_env_value(client_secret));
+        match expand_env_value_checked(client_secret) {
+            Ok(val) => entry.client_secret = Some(val),
+            Err(var_name) => missing_vars.push(var_name),
+        }
     }
-    entry
+
+    if !missing_vars.is_empty() {
+        tracing::info!(
+            "Skipping OAuth provider '{}' - missing environment variables: {}. Set these variables to enable this provider.",
+            entry.name,
+            missing_vars.join(", ")
+        );
+        return None;
+    }
+
+    Some(entry)
 }
 
-/// Expand $env:VARNAME syntax
-fn expand_env_value(value: &str) -> String {
+/// Expand $env:VARNAME syntax, returning error if variable is not found
+fn expand_env_value_checked(value: &str) -> std::result::Result<String, String> {
     if value.starts_with("$env:") {
         let var_name = value.trim_start_matches("$env:");
         match std::env::var(var_name) {
             Ok(val) => {
                 tracing::debug!("Expanded env var {} from {}", var_name, value);
-                val
+                Ok(val)
             }
-            Err(_) => {
-                tracing::warn!(
-                    "Environment variable {} not found, keeping placeholder {}",
-                    var_name,
-                    value
-                );
-                value.to_string()
-            }
+            Err(_) => Err(var_name.to_string()),
         }
     } else {
-        value.to_string()
+        Ok(value.to_string())
     }
 }

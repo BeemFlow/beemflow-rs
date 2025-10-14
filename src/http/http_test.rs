@@ -312,20 +312,6 @@ async fn test_app_error_conversion() {
 }
 
 #[tokio::test]
-async fn test_oauth_providers_list() {
-    let state = create_test_state();
-    let result = list_oauth_providers_handler(State(state)).await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn test_oauth_credentials_list() {
-    let state = create_test_state();
-    let result = list_oauth_credentials_handler(State(state)).await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
 async fn test_metrics_endpoint() {
     // Record some metrics first
     crate::telemetry::record_http_request("test_handler", "GET", 200);

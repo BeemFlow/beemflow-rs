@@ -38,7 +38,55 @@ struct ParsedEvent {
 
 /// Create webhook routes
 pub fn create_webhook_routes() -> Router<WebhookManagerState> {
-    Router::new().route("/{provider}/{*path}", post(handle_webhook))
+    Router::new()
+        .route("/cron", post(handle_cron_webhook))
+        .route("/{provider}/{*path}", post(handle_webhook))
+}
+
+/// Handle cron webhook notifications
+async fn handle_cron_webhook(
+    State(state): State<WebhookManagerState>,
+    axum::extract::Json(payload): axum::extract::Json<Value>,
+) -> impl IntoResponse {
+    // Log the webhook notification
+    tracing::info!("Received cron webhook: {:?}", payload);
+
+    // Extract notification details
+    if let (Some(event), Some(flow_name), Some(success)) = (
+        payload.get("event").and_then(|v| v.as_str()),
+        payload.get("flow_name").and_then(|v| v.as_str()),
+        payload.get("success").and_then(|v| v.as_bool()),
+    ) {
+        tracing::info!(
+            "Cron event: {} for flow '{}', success={}",
+            event,
+            flow_name,
+            success
+        );
+
+        // Publish event to event bus
+        if let Err(e) = state
+            .event_bus
+            .publish(&format!("cron.{}", event), payload.clone())
+            .await
+        {
+            tracing::error!("Failed to publish cron event: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(
+                    serde_json::json!({"status": "error", "message": "Failed to publish event"}),
+                ),
+            )
+                .into_response();
+        }
+    }
+
+    // Return success response
+    (
+        StatusCode::OK,
+        axum::Json(serde_json::json!({"status": "received"})),
+    )
+        .into_response()
 }
 
 /// Handle incoming webhook

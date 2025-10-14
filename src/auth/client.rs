@@ -3,16 +3,27 @@
 //! Manages OAuth credentials and token refresh for external services
 //! like Google, Twitter, GitHub, etc.
 
+use crate::http::session::SessionStore;
+use crate::http::template::TemplateRenderer;
 use crate::model::OAuthCredential;
 use crate::registry::RegistryManager;
 use crate::storage::Storage;
 use crate::{BeemFlowError, Result};
+use axum::{
+    Json, Router,
+    extract::{Path as AxumPath, Query, State},
+    http::StatusCode,
+    response::{Html, IntoResponse, Redirect},
+    routing::{delete, get, post},
+};
 use chrono::{Duration, Utc};
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
     PkceCodeVerifier, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
     basic::BasicClient,
 };
+use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -413,6 +424,849 @@ impl OAuthClientManager {
             false
         }
     }
+}
+
+// ============================================================================
+// OAUTH CLIENT ROUTES (UI and API for connecting TO providers)
+// ============================================================================
+
+/// OAuth client state for route handlers
+pub struct OAuthClientState {
+    pub oauth_client: Arc<OAuthClientManager>,
+    pub storage: Arc<dyn Storage>,
+    pub registry_manager: Arc<RegistryManager>,
+    pub session_store: Arc<SessionStore>,
+    pub template_renderer: Arc<TemplateRenderer>,
+}
+
+/// Create OAuth client routes (for connecting TO external providers)
+pub fn create_oauth_client_routes(state: Arc<OAuthClientState>) -> Router {
+    Router::new()
+        // OAuth UI endpoints (OAuth CLIENT - for connecting TO providers)
+        .route("/oauth/providers", get(oauth_providers_handler))
+        .route("/oauth/providers/{provider}", get(oauth_provider_handler))
+        .route("/oauth/success", get(oauth_success_handler))
+        .route("/oauth/callback", get(oauth_callback_handler))
+        // OAuth Provider management endpoints (JSON API)
+        .route("/oauth/providers/list", get(list_oauth_providers_handler))
+        .route(
+            "/oauth/providers/create",
+            post(create_oauth_provider_handler),
+        )
+        .route("/oauth/providers/{id}/get", get(get_oauth_provider_handler))
+        .route(
+            "/oauth/providers/{id}/update",
+            post(update_oauth_provider_handler),
+        )
+        .route(
+            "/oauth/providers/{id}/delete",
+            delete(delete_oauth_provider_handler),
+        )
+        // OAuth Credential management endpoints (JSON API)
+        .route(
+            "/oauth/credentials/list",
+            get(list_oauth_credentials_handler),
+        )
+        .route(
+            "/oauth/credentials/{id}/delete",
+            delete(delete_oauth_credential_handler),
+        )
+        .route(
+            "/oauth/authorize/{provider}",
+            get(authorize_oauth_provider_handler),
+        )
+        .route("/oauth/callback/api", get(oauth_api_callback_handler))
+        .with_state(state)
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/// Encode OAuth state with embedded session ID for stateless callback handling
+///
+/// Format: `{csrf_token}:{session_id}`
+///
+/// This allows the OAuth callback to identify the session without cookies or
+/// query parameters, making the flow work across web, mobile, and CLI contexts.
+fn encode_oauth_state(csrf_token: &str, session_id: &str) -> String {
+    format!("{}:{}", csrf_token, session_id)
+}
+
+/// Decode OAuth state to extract CSRF token and session ID
+///
+/// Returns `(csrf_token, session_id)` if the state has the expected format,
+/// otherwise returns an authentication error.
+fn decode_oauth_state(state: &str) -> Result<(String, String)> {
+    let mut parts = state.splitn(2, ':');
+
+    match (parts.next(), parts.next()) {
+        (Some(csrf), Some(session)) if !csrf.is_empty() && !session.is_empty() => {
+            Ok((csrf.to_string(), session.to_string()))
+        }
+        _ => Err(BeemFlowError::auth(
+            "Invalid OAuth state format - expected format: {csrf_token}:{session_id}",
+        )),
+    }
+}
+
+/// Generate a simple HTML error page
+fn error_html(title: &str, heading: &str, message: Option<&str>, retry_link: bool) -> String {
+    let message_html = message.map_or(String::new(), |msg| format!("    <p>{}</p>\n", msg));
+    let retry_html = if retry_link {
+        "    <a href=\"/oauth/providers\">Try again</a>\n"
+    } else {
+        ""
+    };
+
+    format!(
+        r#"<!DOCTYPE html>
+<html>
+<head><title>{}</title></head>
+<body>
+    <h1>{}</h1>
+{}{}</body>
+</html>"#,
+        title, heading, message_html, retry_html
+    )
+}
+
+// ============================================================================
+// OAUTH CLIENT UI HANDLERS
+// ============================================================================
+
+async fn oauth_providers_handler(State(state): State<Arc<OAuthClientState>>) -> impl IntoResponse {
+    // Fetch providers from registry and storage
+    let registry_providers = match state.registry_manager.list_oauth_providers().await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Failed to list OAuth providers from registry: {}", e);
+            vec![]
+        }
+    };
+
+    let storage_providers = match state.storage.list_oauth_providers().await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Failed to list OAuth providers from storage: {}", e);
+            vec![]
+        }
+    };
+
+    // Build provider data for template from registry providers
+    let mut provider_data: Vec<Value> = registry_providers
+        .iter()
+        .map(|entry| {
+            let name = entry.display_name.as_ref().unwrap_or(&entry.name);
+            // Use icon from registry entry, default to 🔗 if not specified
+            let icon = entry.icon.as_deref().unwrap_or("🔗");
+
+            // Format scopes
+            let scopes_str = entry
+                .scopes
+                .as_ref()
+                .map(|s| s.join(", "))
+                .unwrap_or_else(|| "None".to_string());
+
+            json!({
+                "id": entry.name,
+                "name": name,
+                "icon": icon,
+                "scopes_str": scopes_str,
+            })
+        })
+        .collect();
+
+    // Add storage providers (custom providers added by users)
+    for p in storage_providers.iter() {
+        // Custom storage providers use a default icon (could be extended to support icons in storage)
+        let icon = "🔗";
+
+        // Format scopes
+        let scopes_str = p
+            .scopes
+            .as_ref()
+            .map(|s| s.join(", "))
+            .unwrap_or_else(|| "None".to_string());
+
+        provider_data.push(json!({
+            "id": p.id,
+            "name": p.name,
+            "icon": icon,
+            "scopes_str": scopes_str,
+        }));
+    }
+
+    // Render template with provider data
+    let template_data = json!({
+        "providers": provider_data
+    });
+
+    match state
+        .template_renderer
+        .render_json("providers", &template_data)
+    {
+        Ok(html) => Html(html),
+        Err(e) => {
+            tracing::error!("Failed to render providers template: {}", e);
+            let message = format!("{}", e);
+            Html(error_html("Error", "Template Error", Some(&message), false))
+        }
+    }
+}
+
+async fn oauth_success_handler() -> impl IntoResponse {
+    Html(include_str!("../../static/oauth/success.html"))
+}
+
+async fn oauth_callback_handler(
+    State(state): State<Arc<OAuthClientState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    // Check for OAuth error response
+    if let Some(error) = params.get("error") {
+        let error_desc = params
+            .get("error_description")
+            .map(|s| s.as_str())
+            .unwrap_or("Unknown error");
+        tracing::error!("OAuth authorization failed: {} - {}", error, error_desc);
+        let message = format!("Error: {}\nDescription: {}", error, error_desc);
+        return (
+            StatusCode::BAD_REQUEST,
+            Html(error_html(
+                "OAuth Error",
+                "OAuth Authorization Failed",
+                Some(&message),
+                true,
+            )),
+        )
+            .into_response();
+    }
+
+    // Get authorization code and state from query params
+    let code = match params.get("code") {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Html(error_html(
+                    "OAuth Error",
+                    "Missing Authorization Code",
+                    None,
+                    true,
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    let state_param = match params.get("state") {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Html(error_html(
+                    "OAuth Error",
+                    "Missing State Parameter",
+                    None,
+                    true,
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    // Decode state to extract CSRF token and session ID
+    // Format: {csrf_token}:{session_id}
+    let (csrf_token, session_id) = match decode_oauth_state(state_param) {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!("Failed to decode OAuth state: {}", e);
+            return (
+                StatusCode::BAD_REQUEST,
+                Html(error_html(
+                    "OAuth Error",
+                    "Invalid State Parameter",
+                    Some("The OAuth state parameter is invalid or malformed."),
+                    true,
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    // Look up session by ID (extracted from state parameter)
+    let session = match state.session_store.get_session(&session_id) {
+        Some(s) => s,
+        None => {
+            tracing::error!("Invalid or expired session: {}", session_id);
+            return (
+                StatusCode::BAD_REQUEST,
+                Html(error_html(
+                    "OAuth Error",
+                    "Session Expired",
+                    Some("Your session has expired. Please try again."),
+                    true,
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    // Validate CSRF token matches what we stored in the session
+    let stored_csrf = match session.data.get("oauth_state").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => {
+            tracing::error!("No oauth_state found in session");
+            return (
+                StatusCode::BAD_REQUEST,
+                Html(error_html(
+                    "OAuth Error",
+                    "Invalid Session",
+                    Some("Session is missing OAuth state. Please try again."),
+                    true,
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    if stored_csrf != csrf_token {
+        tracing::error!(
+            "CSRF token mismatch - possible CSRF attack. Expected: {}, Got: {}",
+            stored_csrf,
+            csrf_token
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            Html(error_html(
+                "OAuth Error",
+                "Security Error",
+                Some("State parameter mismatch. Possible CSRF attack detected."),
+                true,
+            )),
+        )
+            .into_response();
+    }
+
+    // Get stored OAuth parameters from session
+    let code_verifier = match session
+        .data
+        .get("oauth_code_verifier")
+        .and_then(|v| v.as_str())
+    {
+        Some(cv) => cv,
+        None => {
+            tracing::error!("No code_verifier found in session");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(error_html(
+                    "OAuth Error",
+                    "Session Error",
+                    Some("Missing code verifier. Please try again."),
+                    true,
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    let provider_id = match session
+        .data
+        .get("oauth_provider_id")
+        .and_then(|v| v.as_str())
+    {
+        Some(p) => p,
+        None => {
+            tracing::error!("No provider_id found in session");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(error_html(
+                    "OAuth Error",
+                    "Session Error",
+                    Some("Missing provider ID. Please try again."),
+                    true,
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    let integration = session
+        .data
+        .get("oauth_integration")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default");
+
+    // Exchange authorization code for tokens using oauth2 crate
+    match state
+        .oauth_client
+        .exchange_code(provider_id, code, code_verifier, integration)
+        .await
+    {
+        Ok(credential) => {
+            tracing::info!(
+                "Successfully exchanged OAuth code for tokens: {}:{}",
+                credential.provider,
+                credential.integration
+            );
+
+            // Clean up session
+            state.session_store.delete_session(&session_id);
+
+            // Redirect to success page
+            Redirect::to("/oauth/success").into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to exchange authorization code: {}", e);
+
+            // Clean up session even on error
+            state.session_store.delete_session(&session_id);
+
+            let message = format!("Failed to exchange authorization code for tokens: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(error_html(
+                    "OAuth Error",
+                    "Token Exchange Failed",
+                    Some(&message),
+                    true,
+                )),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn oauth_provider_handler(
+    State(state): State<Arc<OAuthClientState>>,
+    AxumPath(provider): AxumPath<String>,
+) -> impl IntoResponse {
+    // Get default scopes for the provider from registry
+    let scopes = match state.registry_manager.get_oauth_provider(&provider).await {
+        Ok(Some(entry)) => entry.scopes.unwrap_or_else(|| vec!["read".to_string()]),
+        _ => vec!["read".to_string()],
+    };
+
+    // Convert Vec<String> to Vec<&str>
+    let scope_refs: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
+
+    // Create session first (needed for encoding session_id into state)
+    let session = state
+        .session_store
+        .create_session("oauth_flow", chrono::Duration::minutes(10));
+
+    // Generate random CSRF token for security
+    let csrf_token = oauth2::CsrfToken::new_random();
+    let csrf_secret = csrf_token.secret().clone();
+
+    // Encode session ID into state parameter for stateless callback handling
+    let combined_state = encode_oauth_state(&csrf_secret, &session.id);
+
+    // Build authorization URL with custom state (csrf embedded in state parameter)
+    let (auth_url, code_verifier) = match state
+        .oauth_client
+        .build_auth_url(&provider, &scope_refs, None, Some(combined_state))
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!("Failed to build auth URL for {}: {}", provider, e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to build authorization URL: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    // Store CSRF token (not combined state!) in session for callback validation
+    state
+        .session_store
+        .update_session(&session.id, "oauth_state".to_string(), json!(csrf_secret));
+    state.session_store.update_session(
+        &session.id,
+        "oauth_code_verifier".to_string(),
+        json!(code_verifier),
+    );
+    state.session_store.update_session(
+        &session.id,
+        "oauth_provider_id".to_string(),
+        json!(provider),
+    );
+    state.session_store.update_session(
+        &session.id,
+        "oauth_integration".to_string(),
+        json!("default"),
+    );
+
+    // Redirect to OAuth provider (session_id is embedded in state parameter)
+    (
+        StatusCode::FOUND,
+        [(axum::http::header::LOCATION, auth_url.as_str())],
+    )
+        .into_response()
+}
+
+// ============================================================================
+// OAUTH PROVIDER API HANDLERS
+// ============================================================================
+
+/// List all OAuth providers (from both registry and storage)
+async fn list_oauth_providers_handler(
+    State(state): State<Arc<OAuthClientState>>,
+) -> std::result::Result<Json<Value>, StatusCode> {
+    // Get built-in providers from registry
+    let registry_providers = state
+        .registry_manager
+        .list_oauth_providers()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Get custom providers from storage
+    let storage_providers = state
+        .storage
+        .list_oauth_providers()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Convert registry entries to simplified provider format
+    let mut all_providers: Vec<Value> = registry_providers
+        .iter()
+        .map(|entry| {
+            json!({
+                "id": entry.name,
+                "name": entry.display_name.as_ref().unwrap_or(&entry.name),
+                "auth_url": entry.auth_url,
+                "token_url": entry.token_url,
+                "scopes": entry.scopes,
+                "source": "registry",
+                // Don't expose client_id/secret for registry providers
+            })
+        })
+        .collect();
+
+    // Add storage providers
+    for provider in storage_providers {
+        all_providers.push(json!({
+            "id": provider.id,
+            "name": provider.name,
+            "auth_url": provider.auth_url,
+            "token_url": provider.token_url,
+            "scopes": provider.scopes,
+            "source": "storage",
+        }));
+    }
+
+    Ok(Json(json!({ "providers": all_providers })))
+}
+
+/// Get a specific OAuth provider (checks registry first, then storage)
+async fn get_oauth_provider_handler(
+    State(state): State<Arc<OAuthClientState>>,
+    AxumPath(id): AxumPath<String>,
+) -> std::result::Result<Json<Value>, StatusCode> {
+    // Check registry first for built-in providers
+    if let Some(entry) = state
+        .registry_manager
+        .get_server(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        && entry.entry_type == "oauth_provider"
+    {
+        return Ok(Json(json!({
+            "id": entry.name,
+            "name": entry.display_name.as_ref().unwrap_or(&entry.name),
+            "auth_url": entry.auth_url,
+            "token_url": entry.token_url,
+            "scopes": entry.scopes,
+            "source": "registry",
+            // Don't expose client_id/secret for registry providers
+        })));
+    }
+
+    // Fall back to storage for custom providers
+    let provider = state
+        .storage
+        .get_oauth_provider(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(json!({
+        "id": provider.id,
+        "name": provider.name,
+        "auth_url": provider.auth_url,
+        "token_url": provider.token_url,
+        "scopes": provider.scopes,
+        "source": "storage",
+    })))
+}
+
+/// Create a new OAuth provider
+async fn create_oauth_provider_handler(
+    State(state): State<Arc<OAuthClientState>>,
+    Json(mut provider): Json<crate::model::OAuthProvider>,
+) -> std::result::Result<Json<Value>, StatusCode> {
+    // Validate provider
+    provider.validate().map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // Ensure timestamps are set
+    let now = chrono::Utc::now();
+    provider.created_at = now;
+    provider.updated_at = now;
+
+    // Save provider
+    state
+        .storage
+        .save_oauth_provider(&provider)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(json!({
+        "success": true,
+        "provider": provider,
+    })))
+}
+
+/// Update an existing OAuth provider
+async fn update_oauth_provider_handler(
+    State(state): State<Arc<OAuthClientState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(mut provider): Json<crate::model::OAuthProvider>,
+) -> std::result::Result<Json<Value>, StatusCode> {
+    // Verify provider exists
+    let existing = state
+        .storage
+        .get_oauth_provider(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Update fields while preserving ID and created_at
+    provider.id = id;
+    provider.created_at = existing.created_at;
+    provider.updated_at = chrono::Utc::now();
+
+    // Validate and save
+    provider.validate().map_err(|_| StatusCode::BAD_REQUEST)?;
+    state
+        .storage
+        .save_oauth_provider(&provider)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(json!({
+        "success": true,
+        "provider": provider,
+    })))
+}
+
+/// Delete an OAuth provider
+async fn delete_oauth_provider_handler(
+    State(state): State<Arc<OAuthClientState>>,
+    AxumPath(id): AxumPath<String>,
+) -> std::result::Result<Json<Value>, StatusCode> {
+    state
+        .storage
+        .delete_oauth_provider(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(json!({ "success": true })))
+}
+
+// ============================================================================
+// OAUTH CREDENTIAL API HANDLERS
+// ============================================================================
+
+/// List all OAuth credentials
+async fn list_oauth_credentials_handler(
+    State(state): State<Arc<OAuthClientState>>,
+) -> std::result::Result<Json<Value>, StatusCode> {
+    let credentials = state
+        .storage
+        .list_oauth_credentials()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Redact access tokens for security
+    let safe_credentials: Vec<Value> = credentials
+        .iter()
+        .map(|cred| {
+            json!({
+                "id": cred.id,
+                "provider": cred.provider,
+                "integration": cred.integration,
+                "scope": cred.scope,
+                "expires_at": cred.expires_at,
+                "created_at": cred.created_at,
+                "updated_at": cred.updated_at,
+                "has_refresh_token": cred.refresh_token.is_some(),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "credentials": safe_credentials })))
+}
+
+/// Delete an OAuth credential
+async fn delete_oauth_credential_handler(
+    State(state): State<Arc<OAuthClientState>>,
+    AxumPath(id): AxumPath<String>,
+) -> std::result::Result<Json<Value>, StatusCode> {
+    state
+        .storage
+        .delete_oauth_credential(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(json!({ "success": true })))
+}
+
+/// Initiate OAuth authorization flow for a provider
+async fn authorize_oauth_provider_handler(
+    State(state): State<Arc<OAuthClientState>>,
+    AxumPath(provider_id): AxumPath<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> std::result::Result<Json<Value>, StatusCode> {
+    // Get scopes from query parameters (comma-separated)
+    let scopes = params
+        .get("scopes")
+        .map(|s| s.split(',').map(|s| s.trim()).collect::<Vec<_>>())
+        .unwrap_or_else(|| vec!["read"]);
+
+    // Get integration name (optional)
+    let integration = params.get("integration").map(|s| s.as_str());
+
+    // Create session first (needed for encoding session_id into state)
+    let session = state
+        .session_store
+        .create_session("oauth_flow", chrono::Duration::minutes(10));
+
+    // Generate random CSRF token for security
+    let csrf_token = oauth2::CsrfToken::new_random();
+    let csrf_secret = csrf_token.secret().clone();
+
+    // Encode session ID into state parameter for stateless callback handling
+    // Format: {csrf_token}:{session_id}
+    // This eliminates the need for cookies or query parameters in the callback
+    let combined_state = encode_oauth_state(&csrf_secret, &session.id);
+
+    // Build authorization URL with custom state (csrf embedded in state parameter)
+    let (auth_url, code_verifier) = state
+        .oauth_client
+        .build_auth_url(&provider_id, &scopes, integration, Some(combined_state))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Store CSRF token (not combined state!) in session for callback validation
+    state
+        .session_store
+        .update_session(&session.id, "oauth_state".to_string(), json!(csrf_secret));
+    state.session_store.update_session(
+        &session.id,
+        "oauth_code_verifier".to_string(),
+        json!(code_verifier),
+    );
+    state.session_store.update_session(
+        &session.id,
+        "oauth_provider_id".to_string(),
+        json!(provider_id),
+    );
+    state.session_store.update_session(
+        &session.id,
+        "oauth_integration".to_string(),
+        json!(integration.unwrap_or("default")),
+    );
+
+    // Return authorization URL (session_id is now embedded in the state parameter)
+    Ok(Json(json!({
+        "authorization_url": auth_url,
+        "expires_at": session.expires_at,
+    })))
+}
+
+/// Handle OAuth callback and exchange code for tokens
+async fn oauth_api_callback_handler(
+    State(state): State<Arc<OAuthClientState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> std::result::Result<Json<Value>, StatusCode> {
+    // Check for OAuth provider errors first (e.g., user denied access)
+    if let Some(error) = params.get("error") {
+        let error_desc = params
+            .get("error_description")
+            .map(|s| s.as_str())
+            .unwrap_or("Unknown OAuth error");
+
+        tracing::warn!("OAuth provider error: {} - {}", error, error_desc);
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Get authorization code and state from OAuth provider
+    let code = params.get("code").ok_or(StatusCode::BAD_REQUEST)?;
+    let state_param = params.get("state").ok_or(StatusCode::BAD_REQUEST)?;
+
+    // Decode state to extract CSRF token and session ID
+    // Format: {csrf_token}:{session_id}
+    let (csrf_token, session_id) =
+        decode_oauth_state(state_param).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // Look up session by ID (extracted from state parameter)
+    let session = state
+        .session_store
+        .get_session(&session_id)
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    // Validate CSRF token matches what we stored in the session
+    let stored_csrf = session
+        .data
+        .get("oauth_state")
+        .and_then(|v| v.as_str())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    if stored_csrf != csrf_token {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Get stored code_verifier and provider_id
+    let code_verifier = session
+        .data
+        .get("oauth_code_verifier")
+        .and_then(|v| v.as_str())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    let provider_id = session
+        .data
+        .get("oauth_provider_id")
+        .and_then(|v| v.as_str())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    let stored_integration = session
+        .data
+        .get("oauth_integration")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default");
+
+    // Exchange code for tokens
+    let credential = state
+        .oauth_client
+        .exchange_code(provider_id, code, code_verifier, stored_integration)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Clean up session
+    state.session_store.delete_session(&session_id);
+
+    Ok(Json(json!({
+        "success": true,
+        "credential": {
+            "id": credential.id,
+            "provider": credential.provider,
+            "integration": credential.integration,
+            "scope": credential.scope,
+            "expires_at": credential.expires_at,
+            "created_at": credential.created_at,
+        }
+    })))
 }
 
 #[cfg(test)]
