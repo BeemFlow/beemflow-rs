@@ -31,6 +31,7 @@ pub mod runs {
     pub struct StartOutput {
         pub run_id: String,
         pub status: String,
+        pub outputs: HashMap<String, Value>,
     }
 
     #[derive(Deserialize, JsonSchema)]
@@ -105,6 +106,7 @@ pub mod runs {
             Ok(StartOutput {
                 run_id: result.run_id.to_string(),
                 status: "completed".to_string(),
+                outputs: result.outputs,
             })
         }
     }

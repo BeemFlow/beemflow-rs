@@ -21,12 +21,12 @@ impl CoreAdapter {
         Self
     }
 
-    /// Execute echo tool - prints text and returns it in output
+    /// Execute echo tool - logs text and returns it in output
     async fn execute_echo(&self, inputs: HashMap<String, Value>) -> Result<HashMap<String, Value>> {
         let text = inputs.get("text").and_then(|v| v.as_str()).unwrap_or("");
 
-        // Always print to stdout for echo (this is the point of echo)
-        println!("{}", text);
+        // Log to tracing (stderr) instead of stdout to avoid breaking MCP JSON-RPC
+        tracing::info!("echo: {}", text);
 
         // Return inputs but filter out internal fields
         let mut result = HashMap::new();
