@@ -156,7 +156,7 @@ impl HttpAdapter {
         let mut headers = HashMap::new();
         if let Some(ref manifest_headers) = manifest.headers {
             for (k, v) in manifest_headers {
-                let expanded = self.expand_header_value(v);
+                let expanded = self.expand_header_value(v)?;
                 headers.insert(k.clone(), expanded);
             }
         }
@@ -184,31 +184,43 @@ impl HttpAdapter {
 
     /// Expand $env: and $oauth: references in header values
     ///
-    /// This is a synchronous helper - actual OAuth expansion must happen
-    /// at execution time when we have access to storage context.
-    fn expand_header_value(&self, value: &str) -> String {
+    /// Returns an error if a required environment variable is not found.
+    /// OAuth expansion is deferred to execution time.
+    fn expand_header_value(&self, value: &str) -> Result<String> {
         // Handle $env:VARNAME
         if value.starts_with("$env:") {
             let var_name = value.trim_start_matches("$env:");
-            return std::env::var(var_name).unwrap_or_else(|_| value.to_string());
+            return std::env::var(var_name).map_err(|_| {
+                crate::BeemFlowError::adapter(format!(
+                    "Environment variable '{}' not found. Required for header value '{}'. \
+                    Set this variable in your environment or .env file.",
+                    var_name, value
+                ))
+            });
+        }
+
+        // Handle Bearer $env: prefix
+        if value.starts_with("Bearer $env:") {
+            let var_name = value.trim_start_matches("Bearer $env:");
+            return std::env::var(var_name)
+                .map(|token| format!("Bearer {}", token))
+                .map_err(|_| {
+                    crate::BeemFlowError::adapter(format!(
+                        "Environment variable '{}' not found. Required for Bearer token. \
+                        Set this variable in your environment or .env file.",
+                        var_name
+                    ))
+                });
         }
 
         // Handle $oauth:provider:integration
         // Note: OAuth expansion is deferred to execution time
         // This just marks the value for expansion
         if value.starts_with("$oauth:") {
-            return value.to_string();
+            return Ok(value.to_string());
         }
 
-        // Handle Bearer $env: prefix
-        if value.starts_with("Bearer $env:") {
-            let var_name = value.trim_start_matches("Bearer $env:");
-            if let Ok(token) = std::env::var(var_name) {
-                return format!("Bearer {}", token);
-            }
-        }
-
-        value.to_string()
+        Ok(value.to_string())
     }
 
     /// Expand OAuth tokens in headers at execution time
