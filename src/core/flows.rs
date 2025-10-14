@@ -42,7 +42,9 @@ pub mod flows {
         #[schemars(description = "Name of the flow (optional, can be inferred from content)")]
         pub name: Option<String>,
         #[schemars(description = "YAML content of the flow definition")]
-        pub content: String,
+        pub content: Option<String>,
+        #[schemars(description = "Path to flow file (alternative to content)")]
+        pub file: Option<String>,
     }
 
     #[derive(Serialize)]
@@ -247,7 +249,7 @@ pub mod flows {
         name = "save_flow",
         input = SaveInput,
         http = "POST /flows",
-        cli = "flows save <NAME> --file <FILE>",
+        cli = "flows save <NAME> [--content <CONTENT>] [--file <FILE>]",
         description = "Save or update a flow definition"
     )]
     pub struct Save {
@@ -260,8 +262,24 @@ pub mod flows {
         type Output = SaveOutput;
 
         async fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+            // Get content from either content or file
+            let content = match (input.content, input.file) {
+                (Some(c), None) => c,
+                (None, Some(f)) => tokio::fs::read_to_string(&f).await?,
+                (Some(_), Some(_)) => {
+                    return Err(BeemFlowError::validation(
+                        "Cannot specify both content and file",
+                    ));
+                }
+                (None, None) => {
+                    return Err(BeemFlowError::validation(
+                        "Must specify either content or file",
+                    ));
+                }
+            };
+
             // Parse and validate the flow
-            let flow = parse_string(&input.content, None)?;
+            let flow = parse_string(&content, None)?;
             Validator::validate(&flow)?;
 
             // Determine flow name
@@ -273,8 +291,7 @@ pub mod flows {
             let flows_dir = crate::config::get_flows_dir(&self.deps.config);
 
             // Save flow (returns true if file was updated, false if created new)
-            let was_updated =
-                crate::storage::flows::save_flow(&flows_dir, &name, &input.content).await?;
+            let was_updated = crate::storage::flows::save_flow(&flows_dir, &name, &content).await?;
 
             let status = if was_updated { "updated" } else { "created" };
             let version = flow.version.unwrap_or_else(|| "1.0.0".to_string());

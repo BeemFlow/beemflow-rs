@@ -1472,3 +1472,48 @@ steps:
         "Restored content should be original, not modified"
     );
 }
+
+// ============================================================================
+// Flow File Validation Tests
+// ============================================================================
+
+#[test]
+fn test_all_flows_parse_and_validate() {
+    // Quick parse and validate check for all flow files
+    // Actual execution is covered by `make e2e` and `make integration`
+    let flow_files = vec![
+        // E2E flows
+        "flows/e2e/fetch_and_summarize.flow.yaml",
+        "flows/e2e/parallel_openai.flow.yaml",
+        "flows/e2e/airtable_integration.flow.yaml",
+        // Integration flows
+        "flows/integration/http_patterns.flow.yaml",
+        "flows/integration/nested_parallel.flow.yaml",
+        "flows/integration/templating_system.flow.yaml",
+        "flows/integration/parallel_execution.flow.yaml",
+        "flows/integration/engine_comprehensive.flow.yaml",
+        "flows/integration/spec_compliance_test.flow.yaml",
+        "flows/integration/edge_cases.flow.yaml",
+        // Example flows
+        "flows/examples/hello_world.flow.yaml",
+        "flows/examples/memory_demo.flow.yaml",
+    ];
+
+    let mut failed = vec![];
+    for flow_file in &flow_files {
+        match parse_file(flow_file, None) {
+            Ok(flow) => {
+                if let Err(e) = Validator::validate(&flow) {
+                    failed.push(format!("{}: validation failed - {}", flow_file, e));
+                }
+            }
+            Err(e) => {
+                failed.push(format!("{}: parse failed - {}", flow_file, e));
+            }
+        }
+    }
+
+    if !failed.is_empty() {
+        panic!("Flow validation failures:\n{}", failed.join("\n"));
+    }
+}

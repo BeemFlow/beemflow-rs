@@ -194,10 +194,20 @@ fn build_operation_command(
 
         for (field_name, field_schema) in properties {
             let is_required = required.contains(&field_name.as_str());
-            let field_type = field_schema
-                .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("string");
+
+            // Handle both string type and array of types (e.g., ["object", "null"] for Option<HashMap>)
+            let field_type = match field_schema.get("type") {
+                Some(serde_json::Value::String(s)) => s.as_str(),
+                Some(serde_json::Value::Array(arr)) => {
+                    // For arrays like ["object", "null"], pick the first non-null type
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .find(|&s| s != "null")
+                        .unwrap_or("string")
+                }
+                _ => "string",
+            };
+
             let description = field_schema
                 .get("description")
                 .and_then(|d| d.as_str())
@@ -272,10 +282,18 @@ fn extract_input_from_matches(matches: &ArgMatches, meta: &OperationMetadata) ->
 
     if let Some(properties) = meta.schema.get("properties").and_then(|p| p.as_object()) {
         for (field_name, field_schema) in properties {
-            let field_type = field_schema
-                .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("string");
+            // Handle both string type and array of types (e.g., ["object", "null"] for Option<HashMap>)
+            let field_type = match field_schema.get("type") {
+                Some(serde_json::Value::String(s)) => s.as_str(),
+                Some(serde_json::Value::Array(arr)) => {
+                    // For arrays like ["object", "null"], pick the first non-null type
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .find(|&s| s != "null")
+                        .unwrap_or("string")
+                }
+                _ => "string",
+            };
 
             if field_type == "boolean" {
                 if matches.get_flag(field_name.as_str()) {

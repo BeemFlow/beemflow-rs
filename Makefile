@@ -65,8 +65,10 @@ e2e:
 	@failed=0; \
 	for flow in $(E2E_FLOWS); do \
 		timestamp=$$(date +%s); \
-		echo "▶ Running $$flow"; \
-		if ! $(RELEASE_BINARY) run --event "{\"timestamp\":\"$$timestamp\"}" $$flow; then \
+		flow_name=$$(basename $$flow .flow.yaml); \
+		echo "▶ Running $$flow (name: $$flow_name)"; \
+		$(RELEASE_BINARY) flows save $$flow_name --file $$flow > /dev/null; \
+		if ! $(RELEASE_BINARY) runs start $$flow_name --draft --event "{\"timestamp\":\"$$timestamp\"}"; then \
 			echo "  ❌ Flow failed"; \
 			failed=$$((failed + 1)); \
 		fi; \
@@ -81,20 +83,21 @@ e2e:
 integration:
 	@echo "🧪 Running integration tests..."
 	cargo test --test integration_test
-	cargo test --test flows_integration_test
 	@failed=0; \
 	for flow in $(INTEGRATION_FLOWS); do \
 		timestamp=$$(date +%s%N); \
-		echo "Running $$flow"; \
+		flow_name=$$(basename $$flow .flow.yaml); \
+		echo "Running $$flow (name: $$flow_name)"; \
+		cargo run --release -- flows save $$flow_name --file $$flow > /dev/null; \
 		if echo "$$flow" | grep -q "circular_dependencies"; then \
-			if cargo run --release -- run --event "{\"timestamp\":\"$$timestamp\"}" $$flow 2>&1 | grep -q "Circular dependency"; then \
+			if cargo run --release -- runs start $$flow_name --draft --event "{\"timestamp\":\"$$timestamp\"}" 2>&1 | grep -q "Circular dependency"; then \
 				echo "  ✓ Flow correctly detected circular dependency"; \
 			else \
 				echo "  ❌ Flow should have detected circular dependency"; \
 				failed=$$((failed + 1)); \
 			fi; \
 		else \
-			if ! cargo run --release -- run --event "{\"timestamp\":\"$$timestamp\"}" $$flow; then \
+			if ! cargo run --release -- runs start $$flow_name --draft --event "{\"timestamp\":\"$$timestamp\"}"; then \
 				echo "  ❌ Flow $$flow failed"; \
 				failed=$$((failed + 1)); \
 			fi; \
@@ -130,7 +133,6 @@ check:
 	@echo ""
 	@echo "📋 Step 4/4: Running integration tests..."
 	@cargo test --test integration_test --quiet
-	@cargo test --test flows_integration_test --quiet
 	@echo "✅ Integration tests OK"
 	@echo ""
 	@echo "🎉 All checks passed! Ready to commit."
@@ -177,11 +179,16 @@ release:
 # Run a specific flow
 run:
 	@if [ -z "$(FLOW)" ]; then echo "Usage: make run FLOW=path/to/flow.yaml"; exit 1; fi
-	cargo run --release -- run $(FLOW)
+	@flow_name=$$(basename $(FLOW) .flow.yaml); \
+	cargo run --release -- flows save $$flow_name --file $(FLOW) > /dev/null; \
+	cargo run --release -- runs start $$flow_name --draft
 
 # Run with debug logging
 debug:
-	RUST_LOG=debug cargo run --release -- run $(FLOW)
+	@if [ -z "$(FLOW)" ]; then echo "Usage: make debug FLOW=path/to/flow.yaml"; exit 1; fi
+	@flow_name=$$(basename $(FLOW) .flow.yaml); \
+	cargo run --release -- flows save $$flow_name --file $(FLOW) > /dev/null; \
+	RUST_LOG=debug cargo run --release -- runs start $$flow_name --draft
 
 # List all available tools
 tools:
