@@ -44,5 +44,21 @@ jobs:
       - name: Run integration tests
         run: make integration
 
+      - name: Verify environment variables are set
+        run: |
+          echo "Checking if API keys are set..."
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "❌ OPENAI_API_KEY is not set"
+            exit 1
+          else
+            echo "✓ OPENAI_API_KEY is set (${#OPENAI_API_KEY} chars)"
+          fi
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "❌ ANTHROPIC_API_KEY is not set"
+            exit 1
+          else
+            echo "✓ ANTHROPIC_API_KEY is set (${#ANTHROPIC_API_KEY} chars)"
+          fi
+
       - name: Run example workflows
         run: make e2e
