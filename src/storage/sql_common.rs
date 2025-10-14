@@ -3,8 +3,7 @@
 //! This module provides shared helpers and parsing logic for both SQL backends,
 //! eliminating ~1360 lines of duplication.
 
-use crate::{Result, model::*};
-use chrono::{DateTime, Utc};
+use crate::model::*;
 use std::collections::HashMap;
 
 // ============================================================================
@@ -64,30 +63,8 @@ pub fn step_status_to_str(status: StepStatus) -> &'static str {
 // ============================================================================
 // SQLite-specific Helpers
 // ============================================================================
-
-/// Parse JSON from SQLite TEXT field
-#[inline]
-pub fn parse_json_from_text(text: &str) -> Result<serde_json::Value> {
-    Ok(serde_json::from_str(text)?)
-}
-
-/// Parse HashMap from SQLite JSON TEXT
-#[inline]
-pub fn parse_hashmap_from_text(text: &str) -> Result<HashMap<String, serde_json::Value>> {
-    Ok(serde_json::from_str(text)?)
-}
-
-/// Convert DateTime to SQLite INTEGER (unix timestamp)
-#[inline]
-pub fn datetime_to_unix(dt: DateTime<Utc>) -> i64 {
-    dt.timestamp()
-}
-
-/// Parse DateTime from SQLite INTEGER (unix timestamp)
-#[inline]
-pub fn datetime_from_unix(ts: i64) -> DateTime<Utc> {
-    DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)
-}
+// Note: Trivial wrappers removed - use serde_json::from_str, .timestamp(),
+// and DateTime::from_timestamp directly
 
 // ============================================================================
 // PostgreSQL-specific Helpers

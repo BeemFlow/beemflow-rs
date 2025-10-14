@@ -274,16 +274,6 @@ pub async fn rate_limit_middleware(
     next.run(req).await
 }
 
-/// Helper to extract Bearer token from request
-pub fn extract_bearer_token(parts: &Parts) -> Option<String> {
-    parts
-        .headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(String::from)
-}
-
 /// Validate token and return authenticated user
 pub async fn validate_token(storage: &Arc<dyn Storage>, token: &str) -> Result<AuthenticatedUser> {
     // Get token from storage

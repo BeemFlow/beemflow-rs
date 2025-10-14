@@ -85,13 +85,14 @@ impl SqliteStorage {
         Ok(Run {
             id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
             flow_name: row.try_get::<String, _>("flow_name")?.into(),
-            event: parse_hashmap_from_text(&row.try_get::<String, _>("event")?)?,
-            vars: parse_hashmap_from_text(&row.try_get::<String, _>("vars")?)?,
+            event: serde_json::from_str(&row.try_get::<String, _>("event")?)?,
+            vars: serde_json::from_str(&row.try_get::<String, _>("vars")?)?,
             status: parse_run_status(&row.try_get::<String, _>("status")?),
-            started_at: datetime_from_unix(row.try_get("started_at")?),
+            started_at: DateTime::from_timestamp(row.try_get("started_at")?, 0)
+                .unwrap_or_else(Utc::now),
             ended_at: row
                 .try_get::<Option<i64>, _>("ended_at")?
-                .map(datetime_from_unix),
+                .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)),
             steps: None,
         })
     }
@@ -102,10 +103,11 @@ impl SqliteStorage {
             run_id: Uuid::parse_str(&row.try_get::<String, _>("run_id")?)?,
             step_name: row.try_get::<String, _>("step_name")?.into(),
             status: parse_step_status(&row.try_get::<String, _>("status")?),
-            started_at: datetime_from_unix(row.try_get("started_at")?),
+            started_at: DateTime::from_timestamp(row.try_get("started_at")?, 0)
+                .unwrap_or_else(Utc::now),
             ended_at: row
                 .try_get::<Option<i64>, _>("ended_at")?
-                .map(datetime_from_unix),
+                .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)),
             outputs: serde_json::from_str(&row.try_get::<String, _>("outputs")?)?,
             error: row.try_get("error")?,
         })
@@ -132,8 +134,8 @@ impl RunStorage for SqliteStorage {
         .bind(serde_json::to_string(&run.event)?)
         .bind(serde_json::to_string(&run.vars)?)
         .bind(run_status_to_str(run.status))
-        .bind(datetime_to_unix(run.started_at))
-        .bind(run.ended_at.map(datetime_to_unix))
+        .bind(run.started_at.timestamp())
+        .bind(run.ended_at.map(|dt| dt.timestamp()))
         .execute(&self.pool)
         .await?;
 
@@ -197,8 +199,8 @@ impl RunStorage for SqliteStorage {
         .bind(serde_json::to_string(&run.event)?)
         .bind(serde_json::to_string(&run.vars)?)
         .bind(run_status_to_str(run.status))
-        .bind(datetime_to_unix(run.started_at))
-        .bind(run.ended_at.map(datetime_to_unix))
+        .bind(run.started_at.timestamp())
+        .bind(run.ended_at.map(|dt| dt.timestamp()))
         .execute(&self.pool)
         .await?;
 
@@ -224,8 +226,8 @@ impl RunStorage for SqliteStorage {
         .bind(step.run_id.to_string())
         .bind(step.step_name.as_str())
         .bind(step_status_to_str(step.status))
-        .bind(datetime_to_unix(step.started_at))
-        .bind(step.ended_at.map(datetime_to_unix))
+        .bind(step.started_at.timestamp())
+        .bind(step.ended_at.map(|dt| dt.timestamp()))
         .bind(serde_json::to_string(&step.outputs)?)
         .bind(&step.error)
         .execute(&self.pool)

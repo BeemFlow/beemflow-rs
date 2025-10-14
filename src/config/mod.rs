@@ -187,6 +187,23 @@ struct RegistryEntry {
 }
 
 /// Secrets provider trait for resolving secrets
+///
+/// # TODO: Incomplete Feature
+///
+/// This trait is currently **unused** - secrets work via `Engine::collect_secrets()` which
+/// extracts secrets from event data and environment variables (BEEMFLOW_SECRET_*).
+///
+/// **Future Implementation:**
+/// - Inject `SecretsProvider` into `Engine` for pluggable backends
+/// - Support Vault, AWS Secrets Manager, Google Secret Manager, etc.
+/// - Use `Config.secrets` to instantiate the appropriate provider
+///
+/// **Current Workaround:**
+/// Secrets are accessible via `{{ secrets.KEY }}` template syntax, populated from:
+/// - `event.secrets` object
+/// - Environment variables prefixed with `BEEMFLOW_SECRET_`
+///
+/// See `src/engine/mod.rs:501-526` for current implementation.
 pub trait SecretsProvider: Send + Sync {
     /// Get a secret value by key
     fn get_secret(&self, key: &str) -> Result<String>;
