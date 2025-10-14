@@ -29,7 +29,9 @@ struct JsonRpcRequest {
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcResponse {
+    #[serde(rename = "jsonrpc")]
     _jsonrpc: String,
+    #[serde(rename = "id")]
     _id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<Value>,
@@ -303,3 +305,7 @@ impl Default for McpManager {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[path = "manager_test.rs"]
+mod tests;

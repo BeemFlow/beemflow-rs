@@ -62,22 +62,38 @@ e2e:
 	@echo "These flows are functional and should run with proper .env configuration"
 	@echo ""
 	@mkdir -p /tmp/beemflow-e2e
-	@for flow in $(E2E_FLOWS); do \
+	@failed=0; \
+	for flow in $(E2E_FLOWS); do \
 		timestamp=$$(date +%s); \
 		echo "▶ Running $$flow"; \
-		$(RELEASE_BINARY) run --event "{\"timestamp\":\"$$timestamp\"}" $$flow || echo "  ❌ Flow failed"; \
+		if ! $(RELEASE_BINARY) run --event "{\"timestamp\":\"$$timestamp\"}" $$flow; then \
+			echo "  ❌ Flow failed"; \
+			failed=$$((failed + 1)); \
+		fi; \
 		echo ""; \
-	done
+	done; \
+	if [ $$failed -gt 0 ]; then \
+		echo "❌ E2E tests failed: $$failed flow(s) failed"; \
+		exit 1; \
+	fi
 	@echo "✅ E2E tests complete!"
 
 integration:
 	@echo "🧪 Running integration tests..."
 	cargo test --test integration_test
 	cargo test --test flows_integration_test
-	@for flow in $(INTEGRATION_FLOWS); do \
+	@failed=0; \
+	for flow in $(INTEGRATION_FLOWS); do \
 		echo "Running $$flow"; \
-		cargo run --release -- run $$flow || echo "Flow $$flow failed, continuing..."; \
-	done
+		if ! cargo run --release -- run $$flow; then \
+			echo "  ❌ Flow $$flow failed"; \
+			failed=$$((failed + 1)); \
+		fi; \
+	done; \
+	if [ $$failed -gt 0 ]; then \
+		echo "❌ Integration tests failed: $$failed flow(s) failed"; \
+		exit 1; \
+	fi
 
 # Full test suite (unit + integration + e2e CLI tests)
 test-all: test integration e2e
