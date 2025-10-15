@@ -77,12 +77,12 @@ e2e:
 			fi; \
 		else \
 			$(RELEASE_BINARY) flows save $$flow_name --file $$flow > /dev/null 2>&1; \
-			output=$$($(RELEASE_BINARY) runs start $$flow_name --draft 2>&1); \
+			output=$$(RUST_LOG=debug $(RELEASE_BINARY) runs start $$flow_name --draft 2>&1); \
 			if echo "$$output" | grep -q "completed"; then \
 				echo "  ✓ Passed"; \
 			else \
 				echo "  ❌ Failed"; \
-				echo "$$output" | grep -E "Error:|error:" | head -3; \
+				echo "$$output" | grep -E "Error:|error:|failed" | head -5; \
 				failed=$$((failed + 1)); \
 			fi; \
 		fi; \

@@ -48,16 +48,28 @@ jobs:
         run: |
           echo "Checking if API keys are set..."
           if [ -z "$OPENAI_API_KEY" ]; then
-            echo "❌ OPENAI_API_KEY is not set"
+            echo "❌ OPENAI_API_KEY is not set or empty"
+            echo "Secret value starts with: [EMPTY]"
             exit 1
           else
             echo "✓ OPENAI_API_KEY is set (${#OPENAI_API_KEY} chars)"
+            echo "  First 10 chars: ${OPENAI_API_KEY:0:10}..."
           fi
           if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "❌ ANTHROPIC_API_KEY is not set"
+            echo "❌ ANTHROPIC_API_KEY is not set or empty"
+            echo "Secret value starts with: [EMPTY]"
             exit 1
           else
             echo "✓ ANTHROPIC_API_KEY is set (${#ANTHROPIC_API_KEY} chars)"
+            echo "  First 10 chars: ${ANTHROPIC_API_KEY:0:10}..."
+          fi
+
+          # Test that the binary can read env vars
+          echo ""
+          echo "Testing if flow binary can read env vars..."
+          export TEST_VAR="test_value_12345"
+          if ./target/release/flow --version > /dev/null 2>&1; then
+            echo "✓ Binary runs successfully"
           fi
 
       - name: Run example workflows
