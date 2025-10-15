@@ -18,8 +18,9 @@ use crate::core::OperationRegistry;
 use crate::{BeemFlowError, Result};
 use axum::{
     Router,
-    extract::{Json, Path as AxumPath},
+    extract::{Json, Path as AxumPath, Request, State},
     http::StatusCode,
+    middleware::Next,
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -132,6 +133,46 @@ where
     }
 }
 
+/// Marker to indicate the request is over HTTPS (from X-Forwarded-Proto)
+#[derive(Clone, Copy, Debug)]
+pub struct IsHttps(pub bool);
+
+/// Middleware to detect HTTPS from X-Forwarded-Proto header when behind a reverse proxy
+///
+/// This middleware checks the X-Forwarded-Proto header and sets an IsHttps marker
+/// in request extensions if the protocol is HTTPS. This is used for secure cookie flags.
+///
+/// Only active when `trust_proxy` is enabled in config.
+///
+/// Uses Arc<HttpConfig> to avoid cloning config on every request.
+async fn proxy_headers_middleware(
+    http_config: Arc<HttpConfig>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    if http_config.trust_proxy {
+        // Check X-Forwarded-Proto header
+        if let Some(proto) = req.headers().get("x-forwarded-proto")
+            && let Ok(proto_str) = proto.to_str()
+        {
+            let is_https = proto_str.eq_ignore_ascii_case("https");
+            req.extensions_mut().insert(IsHttps(is_https));
+
+            if is_https {
+                tracing::debug!("Request detected as HTTPS via X-Forwarded-Proto");
+            }
+        }
+    } else if http_config.secure {
+        // If not trusting proxy but secure flag is set, assume HTTPS
+        req.extensions_mut().insert(IsHttps(true));
+    } else {
+        // Default to HTTP
+        req.extensions_mut().insert(IsHttps(false));
+    }
+
+    next.run(req).await
+}
+
 // ============================================================================
 // AUTO-GENERATED ROUTES - All operation routes are now generated from metadata
 // ============================================================================
@@ -148,6 +189,8 @@ pub async fn start_server(config: Config) -> Result<()> {
         host: "127.0.0.1".to_string(),
         port: crate::constants::DEFAULT_HTTP_PORT,
         secure: false, // Default to false for local development
+        allowed_origins: None,
+        trust_proxy: false,
     });
 
     // Use centralized dependency creation from core module
@@ -224,12 +267,50 @@ pub async fn start_server(config: Config) -> Result<()> {
 
     tracing::info!("Starting HTTP server on {}", socket_addr);
 
-    // Start server
+    // Create TCP listener
     let listener = tokio::net::TcpListener::bind(socket_addr).await?;
-    axum::serve(listener, app)
+
+    // Create server with graceful shutdown
+    let server = axum::serve(listener, app);
+
+    // Set up graceful shutdown signal handler
+    let shutdown_signal = async {
+        // Wait for SIGTERM (Docker/Kubernetes) or SIGINT (Ctrl+C)
+        let ctrl_c = async {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("failed to install Ctrl+C signal handler");
+        };
+
+        #[cfg(unix)]
+        let terminate = async {
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM signal handler")
+                .recv()
+                .await;
+        };
+
+        #[cfg(not(unix))]
+        let terminate = std::future::pending::<()>();
+
+        tokio::select! {
+            _ = ctrl_c => {
+                tracing::info!("Received SIGINT (Ctrl+C), initiating graceful shutdown...");
+            }
+            _ = terminate => {
+                tracing::info!("Received SIGTERM, initiating graceful shutdown...");
+            }
+        }
+    };
+
+    // Run server with graceful shutdown
+    tracing::info!("Server ready to accept connections");
+    server
+        .with_graceful_shutdown(shutdown_signal)
         .await
         .map_err(|e| BeemFlowError::config(format!("Server error: {}", e)))?;
 
+    tracing::info!("Server shutdown complete");
     Ok(())
 }
 
@@ -281,14 +362,15 @@ fn build_router(
     // Build auto-generated operation routes from metadata
     let operation_routes = build_operation_routes(&state);
 
-    // Build application routes (system endpoints + operation routes)
-    // Note: health_handler and metrics_handler don't use AppState, so we merge everything first
-    let app_routes = Router::new()
-        // System endpoints (special handlers not in operation registry)
+    // Build system endpoints router with storage state for readiness check
+    let system_routes = Router::new()
         .route("/healthz", get(health_handler))
+        .route("/readyz", get(readiness_handler))
         .route("/metrics", get(metrics_handler))
-        // Merge auto-generated operation routes
-        .merge(operation_routes);
+        .with_state(state.storage.clone());
+
+    // Combine system routes with operation routes
+    let app_routes = system_routes.merge(operation_routes);
 
     // Merge all routes together
 
@@ -310,6 +392,15 @@ fn build_router(
         // Add comprehensive middleware stack
         .layer(
             ServiceBuilder::new()
+                // Proxy headers middleware (must come first to detect HTTPS)
+                // Wrap config in Arc to avoid cloning on every request
+                .layer(axum::middleware::from_fn({
+                    let config = Arc::new(http_config.clone());
+                    move |req, next| {
+                        let config = config.clone(); // Clone Arc, not HttpConfig
+                        async move { proxy_headers_middleware(config, req, next).await }
+                    }
+                }))
                 // Session middleware for OAuth flows and authenticated requests
                 .layer(axum::middleware::from_fn(session::session_middleware))
                 // Tracing layer for request/response logging
@@ -322,20 +413,37 @@ fn build_router(
                                 .latency_unit(LatencyUnit::Micros),
                         ),
                 )
-                // CORS layer for cross-origin requests (restrictive policy)
+                // CORS layer for cross-origin requests
                 .layer({
-                    // Build allowed origins dynamically from config
-                    let origin_localhost = format!("http://localhost:{}", http_config.port)
-                        .parse::<axum::http::HeaderValue>()
-                        .expect("valid header value");
-                    let origin_127 = format!("http://127.0.0.1:{}", http_config.port)
-                        .parse::<axum::http::HeaderValue>()
-                        .expect("valid header value");
+                    use axum::http::HeaderValue;
+
+                    // Build allowed origins from config or defaults
+                    let allowed_origins: Vec<HeaderValue> =
+                        if let Some(origins) = &http_config.allowed_origins {
+                            // Use configured origins for production
+                            origins
+                                .iter()
+                                .filter_map(|origin| {
+                                    origin.parse().ok().or_else(|| {
+                                        tracing::warn!("Invalid CORS origin in config: {}", origin);
+                                        None
+                                    })
+                                })
+                                .collect()
+                        } else {
+                            // Default to localhost origins for development
+                            vec![
+                                format!("http://localhost:{}", http_config.port)
+                                    .parse()
+                                    .expect("valid localhost origin"),
+                                format!("http://127.0.0.1:{}", http_config.port)
+                                    .parse()
+                                    .expect("valid 127.0.0.1 origin"),
+                            ]
+                        };
 
                     CorsLayer::new()
-                        // Allow localhost origins based on configured port
-                        .allow_origin([origin_localhost, origin_127])
-                        // Only allow necessary HTTP methods
+                        .allow_origin(allowed_origins)
                         .allow_methods([
                             axum::http::Method::GET,
                             axum::http::Method::POST,
@@ -344,7 +452,6 @@ fn build_router(
                             axum::http::Method::DELETE,
                             axum::http::Method::OPTIONS,
                         ])
-                        // Only allow necessary headers
                         .allow_headers([
                             axum::http::header::CONTENT_TYPE,
                             axum::http::header::AUTHORIZATION,
@@ -400,11 +507,56 @@ async fn serve_static_asset(AxumPath(path): AxumPath<String>) -> impl IntoRespon
 // SYSTEM HANDLERS (Special cases not in operation registry)
 // ============================================================================
 
+/// Health check endpoint - lightweight check that the service is running
+///
+/// Returns 200 OK if the service process is alive. Does not check dependencies.
+/// Use /readyz for a full readiness check including database connectivity.
 async fn health_handler() -> Json<Value> {
     Json(json!({
         "status": "healthy",
         "timestamp": chrono::Utc::now().to_rfc3339(),
     }))
+}
+
+/// Readiness check endpoint - verifies service is ready to handle requests
+///
+/// Returns 200 OK only if:
+/// - Service is running
+/// - Database is accessible
+/// - All critical dependencies are healthy
+///
+/// Use this for Kubernetes readiness probes and load balancer health checks.
+async fn readiness_handler(
+    State(storage): State<Arc<dyn crate::storage::Storage>>,
+) -> std::result::Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Check database connectivity by attempting a simple query
+    // We use list_runs() as a canary - if it succeeds, the database is accessible
+    match storage.list_runs().await {
+        Ok(_) => {
+            // Database is accessible
+            Ok(Json(json!({
+                "status": "ready",
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "checks": {
+                    "database": "ok"
+                }
+            })))
+        }
+        Err(e) => {
+            // Database check failed
+            tracing::error!("Readiness check failed: database error: {:?}", e);
+            Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "status": "not_ready",
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                    "checks": {
+                        "database": "failed"
+                    }
+                })),
+            ))
+        }
+    }
 }
 
 async fn metrics_handler() -> std::result::Result<(StatusCode, String), AppError> {

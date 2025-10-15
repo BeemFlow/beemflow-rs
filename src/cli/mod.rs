@@ -336,6 +336,8 @@ async fn serve_http(host: &str, port: u16) -> Result<()> {
         host: host.to_string(),
         port,
         secure: false,
+        allowed_origins: None,
+        trust_proxy: false,
     });
 
     crate::http::start_server(config).await?;

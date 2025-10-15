@@ -223,6 +223,16 @@ pub struct HttpConfig {
     /// Enable secure cookies (requires HTTPS). Default: false for local development
     #[serde(default)]
     pub secure: bool,
+
+    /// Allowed CORS origins (e.g., ["https://example.com", "https://app.example.com"])
+    /// If not specified, defaults to localhost origins for development
+    #[serde(skip_serializing_if = "Option::is_none", rename = "allowedOrigins")]
+    pub allowed_origins: Option<Vec<String>>,
+
+    /// Trust X-Forwarded-* headers from reverse proxy
+    /// Enable this when running behind a reverse proxy (Caddy, Nginx, etc.)
+    #[serde(default, rename = "trustProxy")]
+    pub trust_proxy: bool,
 }
 
 fn default_host() -> String {
@@ -526,6 +536,7 @@ impl Config {
 
     /// Validate configuration
     pub fn validate(&self) -> Result<()> {
+        // Validate storage configuration
         if self.storage.driver.is_empty() {
             return Err(BeemFlowError::config("storage.driver is required"));
         }
@@ -534,10 +545,98 @@ impl Config {
             return Err(BeemFlowError::config("storage.dsn is required"));
         }
 
-        if let Some(ref http) = self.http
-            && http.port == 0
+        // Validate storage driver is supported
+        match self.storage.driver.as_str() {
+            "sqlite" | "postgres" | "memory" => {}
+            _ => {
+                return Err(BeemFlowError::config(format!(
+                    "Unsupported storage driver: '{}'. Supported: sqlite, postgres, memory",
+                    self.storage.driver
+                )));
+            }
+        }
+
+        // Validate HTTP configuration
+        if let Some(ref http) = self.http {
+            // Validate port is not zero (upper bound is enforced by u16 type)
+            if http.port == 0 {
+                return Err(BeemFlowError::config("http.port must be nonzero (1-65535)"));
+            }
+
+            // Validate host is not empty
+            if http.host.is_empty() {
+                return Err(BeemFlowError::config("http.host cannot be empty"));
+            }
+
+            // Validate allowed_origins if provided
+            if let Some(ref origins) = http.allowed_origins {
+                for origin in origins {
+                    if origin.is_empty() {
+                        return Err(BeemFlowError::config(
+                            "http.allowedOrigins cannot contain empty strings",
+                        ));
+                    }
+
+                    // Basic URL validation - must start with http:// or https://
+                    if !origin.starts_with("http://") && !origin.starts_with("https://") {
+                        return Err(BeemFlowError::config(format!(
+                            "Invalid CORS origin '{}': must start with http:// or https://",
+                            origin
+                        )));
+                    }
+                }
+            }
+        }
+
+        // Validate blob storage configuration
+        if let Some(ref blob) = self.blob
+            && let Some(ref driver) = blob.driver
         {
-            return Err(BeemFlowError::config("http.port must be nonzero"));
+            match driver.as_str() {
+                "filesystem" => {
+                    // For filesystem, directory must be specified
+                    if blob.directory.is_none() {
+                        return Err(BeemFlowError::config(
+                            "blob.directory is required when using filesystem driver",
+                        ));
+                    }
+                }
+                "s3" => {
+                    // For S3, bucket must be specified
+                    if blob.bucket.is_none() {
+                        return Err(BeemFlowError::config(
+                            "blob.bucket is required when using S3 driver",
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(BeemFlowError::config(format!(
+                        "Unsupported blob driver: '{}'. Supported: filesystem, s3",
+                        driver
+                    )));
+                }
+            }
+        }
+
+        // Validate limits if provided
+        if let Some(ref limits) = self.limits {
+            if limits.max_concurrent_tasks == 0 {
+                return Err(BeemFlowError::config(
+                    "limits.maxConcurrentTasks must be greater than 0",
+                ));
+            }
+
+            if limits.max_recursion_depth == 0 {
+                return Err(BeemFlowError::config(
+                    "limits.maxRecursionDepth must be greater than 0",
+                ));
+            }
+
+            if limits.max_flow_file_size == 0 {
+                return Err(BeemFlowError::config(
+                    "limits.maxFlowFileSize must be greater than 0",
+                ));
+            }
         }
 
         Ok(())
@@ -577,7 +676,9 @@ impl Default for Config {
             http: Some(HttpConfig {
                 host: default_host(),
                 port: default_port(),
-                secure: false, // Default to false for local development
+                secure: false,         // Default to false for local development
+                allowed_origins: None, // Defaults to localhost origins
+                trust_proxy: false,    // Default to false for local development
             }),
             log: Some(LogConfig {
                 level: Some("info".to_string()),
