@@ -62,37 +62,11 @@ impl HttpAdapter {
         for (k, v) in &headers {
             // Validate header value - reqwest rejects invalid characters
             Self::validate_header_value(k, v)?;
-
-            // Log header (redact sensitive values to prevent secret leakage)
-            let is_sensitive = k.eq_ignore_ascii_case("authorization")
-                || k.eq_ignore_ascii_case("x-api-key")
-                || k.to_lowercase().contains("token")
-                || k.to_lowercase().contains("secret")
-                || k.to_lowercase().contains("key");
-
-            if is_sensitive {
-                tracing::debug!("Adding header '{}': [REDACTED] ({} chars)", k, v.len());
-            } else {
-                let preview: String = v.chars().take(30).collect();
-                tracing::debug!(
-                    "Adding header '{}': '{}...' ({} chars)",
-                    k,
-                    preview,
-                    v.len()
-                );
-            }
-
             request = request.header(k, v);
         }
 
         // Add body if present
         if let Some(body_val) = body {
-            tracing::debug!(
-                "Adding body: {} bytes",
-                serde_json::to_string(&body_val)
-                    .map(|s| s.len())
-                    .unwrap_or(0)
-            );
             if body_val.is_object() || body_val.is_array() {
                 request = request.json(&body_val);
             } else if let Some(s) = body_val.as_str() {
@@ -102,20 +76,7 @@ impl HttpAdapter {
 
         // Execute request
         let response = request.send().await.map_err(|e| {
-            tracing::error!(
-                "HTTP request failed: {} (is_builder: {}, is_request: {}, is_connect: {})",
-                e,
-                e.is_builder(),
-                e.is_request(),
-                e.is_connect()
-            );
-            crate::BeemFlowError::Network(crate::error::NetworkError::Http(format!(
-                "{} (builder: {}, request: {}, connect: {})",
-                e,
-                e.is_builder(),
-                e.is_request(),
-                e.is_connect()
-            )))
+            crate::BeemFlowError::Network(crate::error::NetworkError::Http(e.to_string()))
         })?;
 
         // Check status code
@@ -198,12 +159,6 @@ impl HttpAdapter {
         if let Some(ref manifest_headers) = manifest.headers {
             for (k, v) in manifest_headers {
                 let expanded = self.expand_header_value(v)?;
-                tracing::debug!(
-                    "Expanded header '{}': {} chars (from template: {})",
-                    k,
-                    expanded.len(),
-                    v
-                );
                 headers.insert(k.clone(), expanded);
             }
         }
