@@ -60,7 +60,12 @@ impl HttpAdapter {
 
         // Add headers
         for (k, v) in &headers {
-            tracing::debug!("Adding header '{}': '{}...' ({} chars)", k, &v.chars().take(20).collect::<String>(), v.len());
+            tracing::debug!(
+                "Adding header '{}': '{}...' ({} chars)",
+                k,
+                &v.chars().take(20).collect::<String>(),
+                v.len()
+            );
             request = request.header(k, v);
         }
 
@@ -75,11 +80,19 @@ impl HttpAdapter {
 
         // Execute request
         let response = request.send().await.map_err(|e| {
-            tracing::error!("HTTP request failed: {} (is_builder: {}, is_request: {}, is_connect: {})",
-                e, e.is_builder(), e.is_request(), e.is_connect());
+            tracing::error!(
+                "HTTP request failed: {} (is_builder: {}, is_request: {}, is_connect: {})",
+                e,
+                e.is_builder(),
+                e.is_request(),
+                e.is_connect()
+            );
             crate::BeemFlowError::Network(crate::error::NetworkError::Http(format!(
                 "{} (builder: {}, request: {}, connect: {})",
-                e, e.is_builder(), e.is_request(), e.is_connect()
+                e,
+                e.is_builder(),
+                e.is_request(),
+                e.is_connect()
             )))
         })?;
 
@@ -163,7 +176,12 @@ impl HttpAdapter {
         if let Some(ref manifest_headers) = manifest.headers {
             for (k, v) in manifest_headers {
                 let expanded = self.expand_header_value(v)?;
-                tracing::debug!("Header {}: {} chars (from template: {})", k, expanded.len(), v);
+                tracing::debug!(
+                    "Header {}: {} chars (from template: {})",
+                    k,
+                    expanded.len(),
+                    v
+                );
                 headers.insert(k.clone(), expanded);
             }
         }
