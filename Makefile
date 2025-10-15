@@ -77,11 +77,13 @@ e2e:
 			fi; \
 		else \
 			$(RELEASE_BINARY) flows save $$flow_name --file $$flow > /dev/null 2>&1; \
-			if ! $(RELEASE_BINARY) runs start $$flow_name --draft 2>&1 | grep -q "completed"; then \
-				echo "  ❌ Failed"; \
-				failed=$$((failed + 1)); \
-			else \
+			output=$$($(RELEASE_BINARY) runs start $$flow_name --draft 2>&1); \
+			if echo "$$output" | grep -q "completed"; then \
 				echo "  ✓ Passed"; \
+			else \
+				echo "  ❌ Failed"; \
+				echo "$$output" | grep -E "Error:|error:" | head -3; \
+				failed=$$((failed + 1)); \
 			fi; \
 		fi; \
 	done; \
