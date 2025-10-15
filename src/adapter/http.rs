@@ -58,19 +58,41 @@ impl HttpAdapter {
 
         let mut request = self.client.request(method, &url);
 
-        // Add headers
+        // Add headers with validation
         for (k, v) in &headers {
-            tracing::debug!(
-                "Adding header '{}': '{}...' ({} chars)",
-                k,
-                &v.chars().take(20).collect::<String>(),
-                v.len()
-            );
+            // Validate header value - reqwest rejects invalid characters
+            Self::validate_header_value(k, v)?;
+
+            // Log header (redact sensitive values to prevent secret leakage)
+            let is_sensitive = k.eq_ignore_ascii_case("authorization")
+                || k.eq_ignore_ascii_case("x-api-key")
+                || k.to_lowercase().contains("token")
+                || k.to_lowercase().contains("secret")
+                || k.to_lowercase().contains("key");
+
+            if is_sensitive {
+                tracing::debug!("Adding header '{}': [REDACTED] ({} chars)", k, v.len());
+            } else {
+                let preview: String = v.chars().take(30).collect();
+                tracing::debug!(
+                    "Adding header '{}': '{}...' ({} chars)",
+                    k,
+                    preview,
+                    v.len()
+                );
+            }
+
             request = request.header(k, v);
         }
 
         // Add body if present
         if let Some(body_val) = body {
+            tracing::debug!(
+                "Adding body: {} bytes",
+                serde_json::to_string(&body_val)
+                    .map(|s| s.len())
+                    .unwrap_or(0)
+            );
             if body_val.is_object() || body_val.is_array() {
                 request = request.json(&body_val);
             } else if let Some(s) = body_val.as_str() {
@@ -177,7 +199,7 @@ impl HttpAdapter {
             for (k, v) in manifest_headers {
                 let expanded = self.expand_header_value(v)?;
                 tracing::debug!(
-                    "Header {}: {} chars (from template: {})",
+                    "Expanded header '{}': {} chars (from template: {})",
                     k,
                     expanded.len(),
                     v
@@ -211,24 +233,27 @@ impl HttpAdapter {
     ///
     /// Returns an error if a required environment variable is not found.
     /// OAuth expansion is deferred to execution time.
+    /// Automatically trims whitespace from environment variable values.
     fn expand_header_value(&self, value: &str) -> Result<String> {
         // Handle $env:VARNAME
         if value.starts_with("$env:") {
             let var_name = value.trim_start_matches("$env:");
-            return std::env::var(var_name).map_err(|_| {
-                crate::BeemFlowError::adapter(format!(
-                    "Environment variable '{}' not found. Required for header value '{}'. \
-                    Set this variable in your environment or .env file.",
-                    var_name, value
-                ))
-            });
+            return std::env::var(var_name)
+                .map(|v| v.trim().to_string()) // Trim whitespace/newlines
+                .map_err(|_| {
+                    crate::BeemFlowError::adapter(format!(
+                        "Environment variable '{}' not found. Required for header value '{}'. \
+                        Set this variable in your environment or .env file.",
+                        var_name, value
+                    ))
+                });
         }
 
         // Handle Bearer $env: prefix
         if value.starts_with("Bearer $env:") {
             let var_name = value.trim_start_matches("Bearer $env:");
             return std::env::var(var_name)
-                .map(|token| format!("Bearer {}", token))
+                .map(|token| format!("Bearer {}", token.trim())) // Trim whitespace/newlines
                 .map_err(|_| {
                     crate::BeemFlowError::adapter(format!(
                         "Environment variable '{}' not found. Required for Bearer token. \
@@ -376,6 +401,20 @@ impl HttpAdapter {
             .and_then(|v| v.as_str())
             .unwrap_or(HTTP_METHOD_GET)
             .to_string()
+    }
+
+    /// Validate header value doesn't contain control characters
+    fn validate_header_value(name: &str, value: &str) -> Result<()> {
+        if value.chars().any(|c| c.is_control() && c != '\t') {
+            return Err(crate::BeemFlowError::adapter(format!(
+                "Header '{}' contains invalid control characters (length: {} chars). \
+                This usually means the environment variable has trailing newlines. \
+                Check the secret configuration in GitHub Actions or your .env file.",
+                name,
+                value.len()
+            )));
+        }
+        Ok(())
     }
 
     /// Enrich inputs with defaults from manifest parameters
