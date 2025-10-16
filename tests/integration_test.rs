@@ -1517,3 +1517,77 @@ fn test_all_flows_parse_and_validate() {
         panic!("Flow validation failures:\n{}", failed.join("\n"));
     }
 }
+
+// ============================================================================
+// Organizational Memory (runs.previous) Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_organizational_memory_runs_previous() {
+    let yaml = r#"
+name: memory_test_flow
+on: cli.manual
+steps:
+  - id: check_previous
+    use: core.echo
+    with:
+      text: |
+        {% if runs.previous.id %}
+        Previous run: {{ runs.previous.id }}
+        Previous message: {{ runs.previous.outputs.save_message.text | default("none") }}
+        {% else %}
+        This is the first run
+        {% endif %}
+
+  - id: save_message
+    use: core.echo
+    with:
+      text: "Run at {{ timestamp }}"
+"#;
+
+    let flow = parse_string(yaml, None).unwrap();
+    let engine = Engine::for_testing().await;
+
+    // First run - should have no previous data
+    let result1 = engine.execute(&flow, HashMap::new()).await.unwrap();
+    let outputs1 = result1.outputs;
+
+    assert!(outputs1.contains_key("check_previous"));
+    assert!(outputs1.contains_key("save_message"));
+
+    // Verify first run shows "This is the first run"
+    let check_output1: HashMap<String, serde_json::Value> =
+        serde_json::from_value(outputs1.get("check_previous").unwrap().clone()).unwrap();
+    let text1 = check_output1.get("text").unwrap().as_str().unwrap();
+    assert!(
+        text1.contains("This is the first run"),
+        "First run should have no previous data, got: {}",
+        text1
+    );
+
+    // Small delay to ensure different timestamps (deterministic run ID uses time buckets)
+    tokio::time::sleep(tokio::time::Duration::from_secs(61)).await;
+
+    // Second run - should access first run's data via runs.previous
+    let result2 = engine.execute(&flow, HashMap::new()).await.unwrap();
+    let outputs2 = result2.outputs;
+
+    let check_output2: HashMap<String, serde_json::Value> =
+        serde_json::from_value(outputs2.get("check_previous").unwrap().clone()).unwrap();
+    let text2 = check_output2.get("text").unwrap().as_str().unwrap();
+
+    // Verify second run can access first run's data
+    assert!(
+        text2.contains("Previous run:"),
+        "Second run should have previous run data, got: {}",
+        text2
+    );
+    assert!(
+        text2.contains(&result1.run_id.to_string()),
+        "Second run should show first run's ID"
+    );
+    assert!(
+        text2.contains("Run at"),
+        "Second run should access previous run's save_message output"
+    );
+}

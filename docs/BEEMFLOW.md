@@ -278,7 +278,7 @@ Always use explicit scopes for clarity:
 {{ event.field }}              # Event data
 {{ outputs.step_id.field }}    # Step outputs (preferred)
 {{ step_id.field }}            # Step outputs (shorthand)
-{{ runs.Previous.field }}      # Previous run data
+{{ runs.previous.field }}      # Previous run data
 ```
 
 ### Array Access
@@ -1329,7 +1329,7 @@ steps:
 | `secrets` | Secrets | `{{ secrets.TOKEN }}` |
 | `event` | Event data | `{{ event.payload }}` |
 | `outputs` | Step outputs | `{{ outputs.step1.result }}` |
-| `runs` | Run history | `{{ runs.Previous.output }}` |
+| `runs` | Run history | `{{ runs.previous.output }}` |
 
 ### Common Tool Patterns
 
