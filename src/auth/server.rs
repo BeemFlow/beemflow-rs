@@ -154,8 +154,14 @@ struct TokenResponse {
 /// Create OAuth routes
 pub fn create_oauth_routes(state: Arc<OAuthServerState>) -> Router {
     Router::new()
+        // RFC 8414 OAuth Authorization Server Metadata (standard path)
         .route(
             "/.well-known/oauth-authorization-server",
+            get(handle_metadata_discovery),
+        )
+        // MCP-specific OAuth metadata path (required by ChatGPT/AI clients)
+        .route(
+            "/.well-known/oauth-authorization-server/mcp",
             get(handle_metadata_discovery),
         )
         .route("/oauth/register", post(handle_client_registration))
@@ -168,7 +174,7 @@ pub fn create_oauth_routes(state: Arc<OAuthServerState>) -> Router {
         .with_state(state)
 }
 
-/// Handle OAuth metadata discovery
+/// Handle OAuth metadata discovery (RFC 8414)
 async fn handle_metadata_discovery(
     State(state): State<Arc<OAuthServerState>>,
 ) -> impl IntoResponse {
