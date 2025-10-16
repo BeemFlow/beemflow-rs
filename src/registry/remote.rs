@@ -23,11 +23,17 @@ impl RemoteRegistry {
     pub async fn list_servers(&self) -> Result<Vec<RegistryEntry>> {
         // Fetch from URL
         let response = reqwest::get(&self.url).await.map_err(|e| {
-            crate::BeemFlowError::Network(crate::error::NetworkError::Http(e.to_string()))
+            crate::BeemFlowError::Network(crate::error::NetworkError::Http(format!(
+                "Failed to fetch registry '{}' from {}: {}",
+                self.name, self.url, e
+            )))
         })?;
 
         let mut entries: Vec<RegistryEntry> = response.json().await.map_err(|e| {
-            crate::BeemFlowError::Network(crate::error::NetworkError::Http(e.to_string()))
+            crate::BeemFlowError::Network(crate::error::NetworkError::Http(format!(
+                "Failed to parse registry '{}' from {}: {}",
+                self.name, self.url, e
+            )))
         })?;
 
         // Label all entries with registry name

@@ -229,7 +229,7 @@ pub fn is_valid_identifier(s: &str) -> bool {
 /// Provides template access to previous run outputs
 ///
 /// This helper allows accessing outputs from the most recent previous run
-/// of the same workflow through the `runs.previous()` template function.
+/// of the same workflow through the `runs.previous` template variable.
 #[derive(Clone)]
 pub struct RunsAccess {
     storage: Arc<dyn Storage>,

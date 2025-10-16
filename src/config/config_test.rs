@@ -130,6 +130,7 @@ fn test_mcp_server_config_deserialize() {
 fn test_registry_config() {
     let reg = RegistryConfig {
         registry_type: "smithery".to_string(),
+        name: Some("smithery".to_string()),
         url: Some("https://registry.smithery.ai/servers".to_string()),
         path: None,
         api_key: Some("test_key".to_string()),

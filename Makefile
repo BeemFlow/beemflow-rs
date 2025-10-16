@@ -64,29 +64,33 @@ e2e:
 	@echo "Building release binary first..."
 	@cargo build --release
 	@echo ""
-	@failed=0; \
+	@test_dir="/tmp/beemflow-e2e-$$$$"; \
+	export BEEMFLOW_HOME="$$test_dir"; \
+	mkdir -p "$$test_dir"; \
+	echo "Using isolated test directory: $$test_dir"; \
+	echo ""; \
+	failed=0; \
 	for flow in $(E2E_FLOWS) $(INTEGRATION_FLOWS); do \
 		flow_name=$$(basename $$flow .flow.yaml); \
 		echo "Running $$flow"; \
-		if echo "$$flow" | grep -q "circular_dependencies"; then \
-			if $(RELEASE_BINARY) flows save $$flow_name --file $$flow 2>&1 | grep -q "Circular dependency"; then \
-				echo "  ✓ Correctly detected circular dependency"; \
-			else \
-				echo "  ❌ Should have detected circular dependency"; \
-				failed=$$((failed + 1)); \
-			fi; \
+		save_output=$$($(RELEASE_BINARY) flows save $$flow_name --file "$$flow" 2>&1); \
+		save_status=$$?; \
+		if [ $$save_status -ne 0 ]; then \
+			echo "  ❌ Save failed"; \
+			echo "$$save_output" | head -5; \
+			failed=$$((failed + 1)); \
+			continue; \
+		fi; \
+		output=$$($(RELEASE_BINARY) runs start $$flow_name --draft 2>&1); \
+		if echo "$$output" | grep -q "completed"; then \
+			echo "  ✓ Passed"; \
 		else \
-			$(RELEASE_BINARY) flows save $$flow_name --file $$flow > /dev/null 2>&1; \
-			output=$$($(RELEASE_BINARY) runs start $$flow_name --draft 2>&1); \
-			if echo "$$output" | grep -q "completed"; then \
-				echo "  ✓ Passed"; \
-			else \
-				echo "  ❌ Failed"; \
-				echo "$$output" | grep -E "Error:" | head -3; \
-				failed=$$((failed + 1)); \
-			fi; \
+			echo "  ❌ Failed"; \
+			echo "$$output" | grep -E "Error:" | head -3; \
+			failed=$$((failed + 1)); \
 		fi; \
 	done; \
+	rm -rf "$$test_dir"; \
 	if [ $$failed -gt 0 ]; then \
 		echo ""; \
 		echo "❌ E2E tests failed: $$failed flow(s) failed"; \
@@ -167,14 +171,16 @@ release:
 run:
 	@if [ -z "$(FLOW)" ]; then echo "Usage: make run FLOW=path/to/flow.yaml"; exit 1; fi
 	@flow_name=$$(basename $(FLOW) .flow.yaml); \
-	cargo run --release -- flows save $$flow_name --file $(FLOW) > /dev/null; \
+	flow_content=$$(cat $(FLOW)); \
+	cargo run --release -- flows save $$flow_name --content "$$flow_content" > /dev/null; \
 	cargo run --release -- runs start $$flow_name --draft
 
 # Run with debug logging
 debug:
 	@if [ -z "$(FLOW)" ]; then echo "Usage: make debug FLOW=path/to/flow.yaml"; exit 1; fi
 	@flow_name=$$(basename $(FLOW) .flow.yaml); \
-	cargo run --release -- flows save $$flow_name --file $(FLOW) > /dev/null; \
+	flow_content=$$(cat $(FLOW)); \
+	cargo run --release -- flows save $$flow_name --content "$$flow_content" > /dev/null; \
 	RUST_LOG=debug cargo run --release -- runs start $$flow_name --draft
 
 # List all available tools

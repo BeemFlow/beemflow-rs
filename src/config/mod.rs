@@ -127,6 +127,10 @@ pub struct RegistryConfig {
     #[serde(rename = "type")]
     pub registry_type: String,
 
+    /// Registry name (optional, used for logging and identification)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
     /// Registry URL (for remote/smithery)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
@@ -1105,6 +1109,7 @@ pub fn load_and_inject_registries<P: AsRef<Path>>(path: P) -> Result<Config> {
                 .get_or_insert_with(Vec::new)
                 .push(RegistryConfig {
                     registry_type: "smithery".to_string(),
+                    name: Some("smithery".to_string()),
                     url: Some("https://registry.smithery.ai/servers".to_string()),
                     path: None,
                     api_key: Some(api_key),

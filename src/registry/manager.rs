@@ -68,11 +68,21 @@ impl RegistryManager {
     }
 
     /// Create standard manager with all registry types
-    /// Priority: local #1 → hub.beemflow.com #2 → default #3
+    /// Priority: local #1 → remote registries #2 → default #3
+    ///
+    /// Users can add custom remote registries via config (federated model):
+    /// ```json
+    /// {
+    ///   "registries": [
+    ///     {"type": "remote", "url": "https://your-domain.com/registry.json", "name": "custom"},
+    ///     {"type": "remote", "url": "https://hub.beemflow.com/registry.json", "name": "hub"}
+    ///   ]
+    /// }
+    /// ```
     pub fn standard(config: Option<&Config>) -> Self {
         let mut registries: Vec<Box<dyn RegistrySource>> = Vec::new();
 
-        // 1. Local registry (highest priority)
+        // 1. Local registry (highest priority) - user's custom tools
         let local_path = config
             .and_then(|c| c.registries.as_ref())
             .and_then(|regs| regs.iter().find(|r| r.registry_type == "local"))
@@ -82,11 +92,20 @@ impl RegistryManager {
 
         registries.push(Box::new(LocalRegistry::new(local_path)));
 
-        // 2. Hub registry (community curated at hub.beemflow.com)
-        registries.push(Box::new(RemoteRegistry::new(
-            "https://hub.beemflow.com/registry.json",
-            "hub",
-        )));
+        // 2. Remote registries from config (federated model)
+        // Allows users to add their own registries or community registries
+        if let Some(cfg) = config
+            && let Some(ref regs) = cfg.registries
+        {
+            for reg in regs {
+                if reg.registry_type == "remote"
+                    && let Some(ref url) = reg.url
+                {
+                    let name = reg.name.as_deref().unwrap_or("remote");
+                    registries.push(Box::new(RemoteRegistry::new(url, name)));
+                }
+            }
+        }
 
         // 3. Default registry (built-in, lowest priority)
         registries.push(Box::new(DefaultRegistry::new()));
@@ -111,7 +130,12 @@ impl RegistryManager {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to load registry: {}", e);
+                    // Only log at debug level for network errors (registries may be unavailable)
+                    if matches!(e, crate::BeemFlowError::Network(_)) {
+                        tracing::debug!("Skipping unavailable remote registry: {}", e);
+                    } else {
+                        tracing::warn!("Failed to load registry: {}", e);
+                    }
                     // Continue with other registries
                 }
             }

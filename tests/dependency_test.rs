@@ -22,11 +22,26 @@ fn create_test_event() -> HashMap<String, serde_json::Value> {
 
 #[tokio::test]
 async fn test_circular_dependency_detected() {
-    let flow = parse_file("flows/integration/circular_dependencies.flow.yaml", None);
+    // Create A → B → A cycle
+    let yaml = r#"
+name: circular_dependencies_test
+on: cli.manual
+steps:
+  - id: step_a
+    use: core.log
+    with:
+      message: "Step A"
+    depends_on:
+      - step_b
+  - id: step_b
+    use: core.log
+    with:
+      message: "Step B"
+    depends_on:
+      - step_a
+"#;
 
-    assert!(flow.is_ok(), "Flow should parse successfully");
-
-    let flow = flow.unwrap();
+    let flow = beemflow::dsl::parse_string(yaml, None).expect("Flow should parse");
     let validation_result = Validator::validate(&flow);
 
     assert!(

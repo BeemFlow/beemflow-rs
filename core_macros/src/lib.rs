@@ -92,13 +92,16 @@ pub fn operation_group(attr: TokenStream, item: TokenStream) -> TokenStream {
             {
                 let metadata = #struct_name::metadata();
 
+                // Filter out CLI-only fields from schema for MCP
+                let filtered_schema = filter_cli_only_fields(&metadata.schema);
+
                 // Determine if tool is read-only based on HTTP method
                 let is_read_only = matches!(metadata.http_method, Some("GET"));
 
                 let mut tool = rmcp::model::Tool::new(
                     std::borrow::Cow::Owned(format!("beemflow_{}", #struct_name::OPERATION_NAME)),
                     std::borrow::Cow::Owned(#struct_name::DESCRIPTION.to_string()),
-                    std::sync::Arc::new(metadata.schema),
+                    std::sync::Arc::new(filtered_schema),
                 );
 
                 // Add annotations with read_only_hint
@@ -131,6 +134,25 @@ pub fn operation_group(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let mut router = axum::Router::new();
                 #(#http_route_calls)*
                 router
+            }
+
+            /// Filter out CLI-only fields from JSON schema for MCP
+            /// Removes field named "file" which is CLI-only convention
+            fn filter_cli_only_fields(schema: &serde_json::Map<String, serde_json::Value>) -> serde_json::Map<String, serde_json::Value> {
+                let mut filtered = schema.clone();
+
+                // Filter properties if they exist
+                // Remove "file" field which is our CLI-only convention
+                if let Some(serde_json::Value::Object(props)) = filtered.get_mut("properties") {
+                    props.remove("file");
+                }
+
+                // Also remove "file" from required array if present
+                if let Some(serde_json::Value::Array(required)) = filtered.get_mut("required") {
+                    required.retain(|v| v.as_str() != Some("file"));
+                }
+
+                filtered
             }
 
             /// Auto-generated function to register MCP tools for all operations in this group

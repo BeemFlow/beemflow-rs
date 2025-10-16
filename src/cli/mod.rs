@@ -217,6 +217,21 @@ fn add_operation_commands(mut app: Command, registry: &OperationRegistry) -> Com
     app
 }
 
+/// Adjust JSON schema for CLI usage
+/// Makes "content" optional in CLI (because "file" is an alternative)
+fn adjust_schema_for_cli(
+    schema: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut adjusted = schema.clone();
+
+    // Convention: "content" becomes optional in CLI (because "file" is alternative)
+    if let Some(serde_json::Value::Array(required)) = adjusted.get_mut("required") {
+        required.retain(|v| v.as_str() != Some("content"));
+    }
+
+    adjusted
+}
+
 /// Build a clap Command for an operation using its schema
 fn build_operation_command(
     _op_name: &str,
@@ -225,10 +240,12 @@ fn build_operation_command(
 ) -> Command {
     let mut cmd = Command::new(cmd_name).about(meta.description);
 
-    // Extract field information from JSON schema
-    if let Some(properties) = meta.schema.get("properties").and_then(|p| p.as_object()) {
-        let required: Vec<&str> = meta
-            .schema
+    // Adjust schema for CLI: make "content" optional (convention)
+    let cli_schema = adjust_schema_for_cli(&meta.schema);
+
+    // Extract field information from adjusted CLI schema
+    if let Some(properties) = cli_schema.get("properties").and_then(|p| p.as_object()) {
+        let required: Vec<&str> = cli_schema
             .get("required")
             .and_then(|r| r.as_array())
             .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
@@ -361,6 +378,12 @@ fn extract_input_from_matches(matches: &ArgMatches, meta: &OperationMetadata) ->
                 input.insert(field_name.clone(), parsed);
             }
         }
+    }
+
+    // CLI-specific handling: inject empty string for "content" if missing but "file" is present
+    // This allows "content" (required in schema for MCP) to be satisfied while using file
+    if !input.contains_key("content") && input.contains_key("file") {
+        input.insert("content".to_string(), serde_json::json!(""));
     }
 
     Ok(serde_json::json!(input))

@@ -13,9 +13,9 @@ steps:
     use: core.echo
     with:
       text: |
-        {% if runs.Previous.id %}
-        📚 Previous run: {{ runs.Previous.id }}
-        Last message: {{ runs.Previous.outputs.generate_message.text | default("No message") }}
+        {% if runs.previous.id %}
+        📚 Previous run: {{ runs.previous.id }}
+        Last message: {{ runs.previous.outputs.generate_message.text | default("No message") }}
         {% else %}
         🆕 This is the first run of this workflow
         {% endif %}

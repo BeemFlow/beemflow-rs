@@ -572,7 +572,17 @@ impl Engine {
         );
 
         let prev_data = runs_access.previous().await;
-        (!prev_data.is_empty()).then_some(prev_data)
+        if !prev_data.is_empty() {
+            // Wrap in "previous" key for template access as runs.previous.id, etc.
+            let mut wrapped = HashMap::new();
+            wrapped.insert(
+                "previous".to_string(),
+                serde_json::to_value(&prev_data).unwrap_or(serde_json::Value::Null),
+            );
+            Some(wrapped)
+        } else {
+            None
+        }
     }
 
     /// Create an engine for testing with in-memory SQLite storage

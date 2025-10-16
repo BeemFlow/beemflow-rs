@@ -20,8 +20,11 @@ pub fn get_home_dir() -> &'static str {
 }
 
 /// Default config directory (~/.beemflow)
+/// Can be overridden with BEEMFLOW_HOME environment variable
 pub fn default_config_dir() -> &'static str {
-    static CONFIG_DIR: Lazy<String> = Lazy::new(|| format!("{}/.beemflow", get_home_dir()));
+    static CONFIG_DIR: Lazy<String> = Lazy::new(|| {
+        std::env::var("BEEMFLOW_HOME").unwrap_or_else(|_| format!("{}/.beemflow", get_home_dir()))
+    });
     &CONFIG_DIR
 }
 

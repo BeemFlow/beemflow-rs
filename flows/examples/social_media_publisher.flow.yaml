@@ -62,7 +62,7 @@ steps:
             - role: "user"
               content: "Generate a fresh BeemFlow post. Pick any angle that feels right today."
             - role: "assistant"
-              content: "{{ runs.Previous.outputs.generate_draft.content[0].text | default(row[0]) }}"
+              content: "{{ runs.previous.outputs.generate_draft.content[0].text | default(row[0]) }}"
             - role: "user"
               content: |
                 Good start! Now apply this feedback from our reviewer: "{{ row[4] }}"
@@ -120,8 +120,8 @@ steps:
       messages:
         - role: "user"
           content: |
-            {% if runs.Previous.outputs.generate_draft.content[0].text %}
-            Our last post was: "{{ runs.Previous.outputs.generate_draft.content[0].text }}"
+            {% if runs.previous.outputs.generate_draft.content[0].text %}
+            Our last post was: "{{ runs.previous.outputs.generate_draft.content[0].text }}"
             
             Generate a fresh BeemFlow post that explores a different angle or story. Don't repeat the same theme.
             {% else %}
@@ -157,9 +157,9 @@ steps:
         =====================================
         Social Media Publisher
         =====================================
-        {% if runs.Previous.outputs.track_published.text %}
+        {% if runs.previous.outputs.track_published.text %}
         📚 Previously posted:
-        {{ runs.Previous.outputs.track_published.text }}
+        {{ runs.previous.outputs.track_published.text }}
         {% endif %}
         
         ✅ Column C: Check to apply feedback

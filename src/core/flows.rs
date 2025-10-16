@@ -43,9 +43,9 @@ pub mod flows {
         pub name: Option<String>,
         #[schemars(description = "YAML content of the flow definition")]
         pub content: String,
-        /// Path to flow file - only for CLI use, hidden from MCP/HTTP schema
+        /// Path to flow file (CLI only)
         #[serde(default)]
-        #[schemars(skip)]
+        #[schemars(description = "Path to flow file (CLI only)")]
         pub file: Option<String>,
     }
 
@@ -161,9 +161,9 @@ pub mod flows {
     pub struct ValidateInput {
         #[schemars(description = "Name of the flow to load from storage")]
         pub name: String,
-        /// Path to flow file - only for CLI use, hidden from MCP/HTTP schema
+        /// Path to flow file (CLI only)
         #[serde(default)]
-        #[schemars(skip)]
+        #[schemars(description = "Path to flow file (CLI only)")]
         pub file: Option<String>,
     }
 
@@ -172,9 +172,9 @@ pub mod flows {
     pub struct GraphInput {
         #[schemars(description = "Name of the flow to load from storage")]
         pub name: String,
-        /// Path to flow file - only for CLI use, hidden from MCP/HTTP schema
+        /// Path to flow file (CLI only)
         #[serde(default)]
-        #[schemars(skip)]
+        #[schemars(description = "Path to flow file (CLI only)")]
         pub file: Option<String>,
     }
 
@@ -255,7 +255,7 @@ pub mod flows {
         name = "save_flow",
         input = SaveInput,
         http = "POST /flows",
-        cli = "flows save [NAME] [--content <CONTENT>] [--file <FILE>]",
+        cli = "flows save <NAME> --file <FILE> --content <CONTENT>",
         description = "Save or update a flow definition"
     )]
     pub struct Save {
@@ -272,9 +272,13 @@ pub mod flows {
             let content = if let Some(file_path) = input.file {
                 // CLI path: read from file
                 tokio::fs::read_to_string(&file_path).await?
-            } else {
+            } else if !input.content.is_empty() {
                 // MCP/HTTP path: use content directly
                 input.content
+            } else {
+                return Err(BeemFlowError::validation(
+                    "Either 'content' or 'file' must be provided",
+                ));
             };
 
             // Parse and validate the flow
