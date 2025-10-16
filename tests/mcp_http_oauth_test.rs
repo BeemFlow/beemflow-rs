@@ -1,6 +1,7 @@
-//! Integration tests for MCP SSE server with OAuth authentication
+//! Integration tests for MCP Streamable HTTP server with OAuth authentication
 //!
-//! Tests OAuth token validation, scope-based authorization, and metadata structures
+//! Tests OAuth token validation, scope-based authorization, and metadata structures.
+//! Uses MCP 2025-03-26 Streamable HTTP transport (replaces deprecated SSE from 2024-11-05)
 
 use beemflow::auth::middleware::validate_token;
 use beemflow::core::OperationRegistry;
