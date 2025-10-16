@@ -16,8 +16,10 @@ use std::collections::HashMap;
 /// MCP transport options
 #[derive(ValueEnum, Clone, Debug)]
 enum McpTransport {
+    /// stdio transport for local process communication (Claude Desktop)
     Stdio,
-    Sse,
+    /// Streamable HTTP transport (MCP 2025-03-26 spec) for remote access
+    Http,
 }
 
 /// Parse a comma-separated list from CLI arguments
@@ -63,12 +65,7 @@ pub async fn run() -> Result<()> {
     // Handle special commands (not operations)
     match matches.subcommand() {
         Some(("serve", sub_matches)) => {
-            let host = sub_matches.get_one::<String>("host").unwrap();
-            let port = sub_matches
-                .get_one::<String>("port")
-                .and_then(|s| s.parse::<u16>().ok())
-                .unwrap_or(crate::constants::DEFAULT_HTTP_PORT);
-            return serve_http(host, port).await;
+            return handle_serve_command(sub_matches).await;
         }
         Some(("cron", _)) => {
             return run_cron_check().await;
@@ -122,19 +119,43 @@ fn build_cli(registry: &OperationRegistry) -> Command {
     app = app
         .subcommand(
             Command::new("serve")
-                .about("Start HTTP server")
+                .about("Start BeemFlow server")
+                .arg(
+                    Arg::new("http")
+                        .long("http")
+                        .action(ArgAction::SetTrue)
+                        .help("Enable HTTP REST API (triggers exclusive mode)"),
+                )
+                .arg(
+                    Arg::new("mcp")
+                        .long("mcp")
+                        .action(ArgAction::SetTrue)
+                        .help("Enable MCP over HTTP transport (triggers exclusive mode)"),
+                )
+                .arg(
+                    Arg::new("mcp-stdio")
+                        .long("mcp-stdio")
+                        .action(ArgAction::SetTrue)
+                        .help("Enable MCP over stdio (exclusive, for Claude Desktop)"),
+                )
+                .arg(
+                    Arg::new("oauth-server")
+                        .long("oauth-server")
+                        .action(ArgAction::SetTrue)
+                        .help("Enable OAuth authorization server (wraps MCP with auth)"),
+                )
                 .arg(
                     Arg::new("host")
                         .long("host")
-                        .default_value("127.0.0.1")
-                        .help("Host to bind to"),
+                        .default_value("0.0.0.0")
+                        .help("Server host"),
                 )
                 .arg(
                     Arg::new("port")
                         .long("port")
                         .short('p')
                         .default_value("3330")
-                        .help("Port to bind to"),
+                        .help("Server port"),
                 ),
         )
         .subcommand(Command::new("cron").about("Run cron checks"))
@@ -220,7 +241,7 @@ fn add_operation_commands(mut app: Command, registry: &OperationRegistry) -> Com
                             .long("transport")
                             .value_parser(clap::value_parser!(McpTransport))
                             .default_value("stdio")
-                            .help("Transport: stdio or sse"),
+                            .help("Transport: stdio or http"),
                     )
                     .arg(Arg::new("host").long("host").default_value("127.0.0.1"))
                     .arg(Arg::new("port").long("port").default_value("3001")),
@@ -386,24 +407,130 @@ fn extract_input_from_matches(matches: &ArgMatches, meta: &OperationMetadata) ->
 // Special Commands (not operations)
 // ============================================================================
 
-/// Start HTTP API server (special command - not an operation)
-async fn serve_http(host: &str, port: u16) -> Result<()> {
-    println!("🚀 Starting BeemFlow HTTP server on {}:{}", host, port);
-    println!("   Access API at http://{}:{}", host, port);
+/// Handle the serve command with new interface flags
+async fn handle_serve_command(matches: &ArgMatches) -> Result<()> {
+    // Parse interface flags
+    let http_flag = matches.get_flag("http");
+    let mcp_flag = matches.get_flag("mcp");
+    let mcp_stdio_flag = matches.get_flag("mcp-stdio");
+    let oauth_server_flag = matches.get_flag("oauth-server");
+
+    // Validation: --mcp-stdio is exclusive
+    if mcp_stdio_flag && (http_flag || mcp_flag) {
+        eprintln!("Error: --mcp-stdio cannot be combined with --http or --mcp");
+        std::process::exit(1);
+    }
+
+    // Validation: --oauth-server requires HTTP server
+    if mcp_stdio_flag && oauth_server_flag {
+        eprintln!("Error: --oauth-server requires HTTP server (incompatible with --mcp-stdio)");
+        std::process::exit(1);
+    }
+
+    // Validation: --port/--host don't apply to stdio
+    if mcp_stdio_flag {
+        let has_port = matches.contains_id("port")
+            && matches.get_one::<String>("port").map(|s| s.as_str()) != Some("3330");
+        let has_host = matches.contains_id("host")
+            && matches.get_one::<String>("host").map(|s| s.as_str()) != Some("0.0.0.0");
+
+        if has_port || has_host {
+            eprintln!("Error: --port and --host not applicable to --mcp-stdio");
+            std::process::exit(1);
+        }
+    }
+
+    // Special case: stdio only
+    if mcp_stdio_flag {
+        return serve_mcp_stdio().await;
+    }
+
+    // Load config to get defaults
+    let mut config =
+        Config::load_and_inject(crate::constants::CONFIG_FILE_NAME).unwrap_or_default();
+
+    // Determine interfaces with CLI override logic
+    let explicit_mode = http_flag || mcp_flag;
+
+    let interfaces = if explicit_mode {
+        // Explicit mode: CLI flags override everything
+        crate::http::ServerInterfaces {
+            http_api: http_flag,
+            mcp: mcp_flag,
+            oauth_server: oauth_server_flag,
+        }
+    } else {
+        // Default mode: use config defaults, allow --oauth-server to enable
+        let http_config = config.http.as_ref();
+        crate::http::ServerInterfaces {
+            http_api: http_config.map(|c| c.enable_http_api).unwrap_or(true),
+            mcp: http_config.map(|c| c.enable_mcp).unwrap_or(true),
+            oauth_server: oauth_server_flag
+                || http_config.map(|c| c.enable_oauth_server).unwrap_or(false),
+        }
+    };
+
+    // Validate at least one interface enabled
+    if !interfaces.http_api && !interfaces.mcp {
+        eprintln!("Error: At least one interface must be enabled");
+        std::process::exit(1);
+    }
+
+    // Get host and port (CLI overrides config)
+    let host = matches.get_one::<String>("host").unwrap();
+    let port = matches
+        .get_one::<String>("port")
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(crate::constants::DEFAULT_HTTP_PORT);
+
+    // Update config with CLI values
+    if let Some(http_config) = config.http.as_mut() {
+        http_config.host = host.to_string();
+        http_config.port = port;
+    } else {
+        config.http = Some(crate::config::HttpConfig {
+            host: host.to_string(),
+            port,
+            secure: false,
+            allowed_origins: None,
+            trust_proxy: false,
+            enable_http_api: true,
+            enable_mcp: true,
+            enable_oauth_server: false,
+        });
+    }
+
+    // Print startup message
+    println!("🚀 Starting BeemFlow server on {}:{}", host, port);
+    if interfaces.http_api {
+        println!("   ✓ HTTP REST API enabled");
+    }
+    if interfaces.mcp {
+        println!("   ✓ MCP over HTTP enabled");
+    }
+    if interfaces.oauth_server {
+        println!("   ✓ OAuth authorization server enabled");
+    }
     println!("   Press Ctrl+C to stop\n");
 
-    let mut config = Config::default();
-    config.http = Some(crate::config::HttpConfig {
-        host: host.to_string(),
-        port,
-        secure: false,
-        allowed_origins: None,
-        trust_proxy: false,
-    });
-
-    crate::http::start_server(config).await?;
+    crate::http::start_server(config, interfaces).await?;
 
     Ok(())
+}
+
+/// Start MCP over stdio (for Claude Desktop)
+async fn serve_mcp_stdio() -> Result<()> {
+    // CRITICAL: For stdio transport, stdout is reserved for JSON-RPC messages.
+    // All diagnostic output MUST go to stderr to avoid corrupting the protocol.
+    eprintln!("Starting MCP server (stdio transport)");
+    eprintln!("Ready for JSON-RPC messages on stdin/stdout");
+
+    let config = Config::load_and_inject(crate::constants::CONFIG_FILE_NAME)?;
+    let deps = crate::core::create_dependencies(&config).await?;
+    let registry = std::sync::Arc::new(OperationRegistry::new(deps));
+    let mcp_server = crate::mcp::McpServer::new(registry);
+
+    mcp_server.serve_stdio().await
 }
 
 /// Start MCP server (special command - not an operation)
@@ -421,7 +548,7 @@ async fn serve_mcp(transport: McpTransport, host: &str, port: u16) -> Result<()>
 
             mcp_server.serve_stdio().await?;
         }
-        McpTransport::Sse => {
+        McpTransport::Http => {
             println!("🚀 Starting MCP server (Streamable HTTP transport with OAuth)");
             let config = Config::load_and_inject(crate::constants::CONFIG_FILE_NAME)?;
             let oauth_issuer = config

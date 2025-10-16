@@ -9,12 +9,13 @@ pub mod webhook;
 
 use self::webhook::{WebhookManagerState, create_webhook_routes};
 use crate::auth::{
-    OAuthConfig, OAuthMiddlewareState, OAuthServerState,
+    OAuthConfig, OAuthServerState,
     client::{OAuthClientState, create_oauth_client_routes},
     create_oauth_routes,
 };
 use crate::config::{Config, HttpConfig};
 use crate::core::OperationRegistry;
+use crate::mcp::{McpServerState, create_mcp_metadata_routes, create_mcp_routes};
 use crate::{BeemFlowError, Result};
 use axum::{
     Router,
@@ -44,6 +45,24 @@ pub struct AppState {
     oauth_client: Arc<crate::auth::OAuthClientManager>,
     storage: Arc<dyn crate::storage::Storage>,
     template_renderer: Arc<template::TemplateRenderer>,
+}
+
+/// Configuration for which server interfaces to enable
+#[derive(Debug, Clone)]
+pub struct ServerInterfaces {
+    pub http_api: bool,
+    pub mcp: bool,
+    pub oauth_server: bool,
+}
+
+impl Default for ServerInterfaces {
+    fn default() -> Self {
+        Self {
+            http_api: true,
+            mcp: true,
+            oauth_server: false, // Opt-in
+        }
+    }
 }
 
 /// Error type for HTTP handlers with enhanced error details
@@ -179,8 +198,8 @@ async fn proxy_headers_middleware(
 // The old handler macros are no longer needed - routes are auto-generated
 // in build_operation_routes() from operation metadata
 
-/// Start the HTTP server
-pub async fn start_server(config: Config) -> Result<()> {
+/// Start the HTTP server with configurable interfaces
+pub async fn start_server(config: Config, interfaces: ServerInterfaces) -> Result<()> {
     // Initialize telemetry
     crate::telemetry::init(config.tracing.as_ref())?;
 
@@ -191,6 +210,9 @@ pub async fn start_server(config: Config) -> Result<()> {
         secure: false, // Default to false for local development
         allowed_origins: None,
         trust_proxy: false,
+        enable_http_api: true,
+        enable_mcp: true,
+        enable_oauth_server: false,
     });
 
     // Use centralized dependency creation from core module
@@ -239,9 +261,6 @@ pub async fn start_server(config: Config) -> Result<()> {
         session_store: session_store.clone(),
     });
 
-    // Create OAuth middleware state
-    let oauth_middleware_state = Arc::new(OAuthMiddlewareState::new(dependencies.storage.clone()));
-
     // Create webhook manager state
     let webhook_state = WebhookManagerState {
         event_bus: state.registry.get_dependencies().event_bus.clone(),
@@ -254,9 +273,9 @@ pub async fn start_server(config: Config) -> Result<()> {
         state,
         webhook_state,
         oauth_server_state,
-        oauth_middleware_state,
-        session_store,
         &http_config,
+        interfaces,
+        &dependencies,
     );
 
     // Determine bind address
@@ -339,14 +358,22 @@ fn build_router(
     state: AppState,
     webhook_state: WebhookManagerState,
     oauth_server_state: Arc<OAuthServerState>,
-    _oauth_middleware_state: Arc<OAuthMiddlewareState>,
-    _session_store: Arc<session::SessionStore>,
     http_config: &HttpConfig,
+    interfaces: ServerInterfaces,
+    deps: &crate::core::Dependencies,
 ) -> Router {
-    // Create OAuth server routes (authorization server endpoints)
-    let oauth_server_routes = create_oauth_routes(oauth_server_state);
+    let mut app = Router::new();
 
-    // Create OAuth client routes (for connecting TO external providers)
+    // Always serve static assets
+    app = app.route("/static/{*path}", get(serve_static_asset));
+
+    // OAuth SERVER routes (opt-in via --oauth-server)
+    if interfaces.oauth_server {
+        let oauth_server_routes = create_oauth_routes(oauth_server_state);
+        app = app.merge(oauth_server_routes);
+    }
+
+    // OAuth CLIENT routes (always enabled - core feature for workflow tools)
     let oauth_client_state = Arc::new(OAuthClientState {
         oauth_client: state.oauth_client.clone(),
         storage: state.storage.clone(),
@@ -355,108 +382,124 @@ fn build_router(
         template_renderer: state.template_renderer.clone(),
     });
     let oauth_client_routes = create_oauth_client_routes(oauth_client_state);
+    app = app.merge(oauth_client_routes);
 
-    // Build auto-generated operation routes from metadata
-    let operation_routes = build_operation_routes(&state);
+    // MCP routes (conditionally enabled)
+    if interfaces.mcp {
+        let oauth_issuer = if interfaces.oauth_server {
+            Some(format!("http://{}:{}", http_config.host, http_config.port))
+        } else {
+            None
+        };
 
-    // Build system endpoints router with storage state for readiness check
+        let mcp_state = Arc::new(McpServerState {
+            operations: state.registry.clone(),
+            oauth_issuer: oauth_issuer.clone(),
+            storage: deps.storage.clone(),
+        });
+
+        let mcp_routes = create_mcp_routes(mcp_state);
+        app = app.merge(mcp_routes);
+
+        // Add MCP metadata routes if OAuth is enabled
+        if let Some(issuer) = oauth_issuer {
+            let base_url = format!("http://{}:{}", http_config.host, http_config.port);
+            let metadata_routes = create_mcp_metadata_routes(issuer, base_url);
+            app = app.merge(metadata_routes);
+        }
+    }
+
+    // HTTP API routes (conditionally enabled)
+    if interfaces.http_api {
+        let operation_routes = build_operation_routes(&state);
+        app = app.merge(operation_routes);
+    }
+
+    // Webhooks (always enabled)
+    app = app.nest(
+        "/webhooks",
+        create_webhook_routes().with_state(webhook_state),
+    );
+
+    // System endpoints (always enabled - healthz, readyz, metrics)
     let system_routes = Router::new()
         .route("/healthz", get(health_handler))
         .route("/readyz", get(readiness_handler))
         .route("/metrics", get(metrics_handler))
         .with_state(state.storage.clone());
+    app = app.merge(system_routes);
 
-    // Combine system routes with operation routes
-    let app_routes = system_routes.merge(operation_routes);
+    // Add comprehensive middleware stack
+    app.layer(
+        ServiceBuilder::new()
+            // Proxy headers middleware (must come first to detect HTTPS)
+            // Wrap config in Arc to avoid cloning on every request
+            .layer(axum::middleware::from_fn({
+                let config = Arc::new(http_config.clone());
+                move |req, next| {
+                    let config = config.clone(); // Clone Arc, not HttpConfig
+                    async move { proxy_headers_middleware(config, req, next).await }
+                }
+            }))
+            // Session middleware for OAuth flows and authenticated requests
+            .layer(axum::middleware::from_fn(session::session_middleware))
+            // Tracing layer for request/response logging
+            .layer(
+                TraceLayer::new_for_http()
+                    .make_span_with(DefaultMakeSpan::new().include_headers(true))
+                    .on_response(
+                        DefaultOnResponse::new()
+                            .level(tracing::Level::INFO)
+                            .latency_unit(LatencyUnit::Micros),
+                    ),
+            )
+            // CORS layer for cross-origin requests
+            .layer({
+                use axum::http::HeaderValue;
 
-    // Merge all routes together
-
-    Router::new()
-        // Serve all embedded static assets (CSS, HTML, etc.) from a single handler
-        // Assets are compiled into the binary - no file system access needed
-        .route("/static/{*path}", get(serve_static_asset))
-        // OAuth 2.1 Authorization Server (RFC 6749 & 8252)
-        .merge(oauth_server_routes)
-        // OAuth CLIENT routes (for connecting TO external providers)
-        .merge(oauth_client_routes)
-        // Webhook routes (including cron webhook)
-        .nest(
-            "/webhooks",
-            create_webhook_routes().with_state(webhook_state),
-        )
-        // Application routes
-        .merge(app_routes)
-        // Add comprehensive middleware stack
-        .layer(
-            ServiceBuilder::new()
-                // Proxy headers middleware (must come first to detect HTTPS)
-                // Wrap config in Arc to avoid cloning on every request
-                .layer(axum::middleware::from_fn({
-                    let config = Arc::new(http_config.clone());
-                    move |req, next| {
-                        let config = config.clone(); // Clone Arc, not HttpConfig
-                        async move { proxy_headers_middleware(config, req, next).await }
-                    }
-                }))
-                // Session middleware for OAuth flows and authenticated requests
-                .layer(axum::middleware::from_fn(session::session_middleware))
-                // Tracing layer for request/response logging
-                .layer(
-                    TraceLayer::new_for_http()
-                        .make_span_with(DefaultMakeSpan::new().include_headers(true))
-                        .on_response(
-                            DefaultOnResponse::new()
-                                .level(tracing::Level::INFO)
-                                .latency_unit(LatencyUnit::Micros),
-                        ),
-                )
-                // CORS layer for cross-origin requests
-                .layer({
-                    use axum::http::HeaderValue;
-
-                    // Build allowed origins from config or defaults
-                    let allowed_origins: Vec<HeaderValue> =
-                        if let Some(origins) = &http_config.allowed_origins {
-                            // Use configured origins for production
-                            origins
-                                .iter()
-                                .filter_map(|origin| {
-                                    origin.parse().ok().or_else(|| {
-                                        tracing::warn!("Invalid CORS origin in config: {}", origin);
-                                        None
-                                    })
+                // Build allowed origins from config or defaults
+                let allowed_origins: Vec<HeaderValue> =
+                    if let Some(origins) = &http_config.allowed_origins {
+                        // Use configured origins for production
+                        origins
+                            .iter()
+                            .filter_map(|origin| {
+                                origin.parse().ok().or_else(|| {
+                                    tracing::warn!("Invalid CORS origin in config: {}", origin);
+                                    None
                                 })
-                                .collect()
-                        } else {
-                            // Default to localhost origins for development
-                            vec![
-                                format!("http://localhost:{}", http_config.port)
-                                    .parse()
-                                    .expect("valid localhost origin"),
-                                format!("http://127.0.0.1:{}", http_config.port)
-                                    .parse()
-                                    .expect("valid 127.0.0.1 origin"),
-                            ]
-                        };
+                            })
+                            .collect()
+                    } else {
+                        // Default to localhost origins for development
+                        vec![
+                            format!("http://localhost:{}", http_config.port)
+                                .parse()
+                                .expect("valid localhost origin"),
+                            format!("http://127.0.0.1:{}", http_config.port)
+                                .parse()
+                                .expect("valid 127.0.0.1 origin"),
+                        ]
+                    };
 
-                    CorsLayer::new()
-                        .allow_origin(allowed_origins)
-                        .allow_methods([
-                            axum::http::Method::GET,
-                            axum::http::Method::POST,
-                            axum::http::Method::PUT,
-                            axum::http::Method::PATCH,
-                            axum::http::Method::DELETE,
-                            axum::http::Method::OPTIONS,
-                        ])
-                        .allow_headers([
-                            axum::http::header::CONTENT_TYPE,
-                            axum::http::header::AUTHORIZATION,
-                            axum::http::header::HeaderName::from_static("x-requested-with"),
-                        ])
-                        .allow_credentials(true)
-                }),
-        )
+                CorsLayer::new()
+                    .allow_origin(allowed_origins)
+                    .allow_methods([
+                        axum::http::Method::GET,
+                        axum::http::Method::POST,
+                        axum::http::Method::PUT,
+                        axum::http::Method::PATCH,
+                        axum::http::Method::DELETE,
+                        axum::http::Method::OPTIONS,
+                    ])
+                    .allow_headers([
+                        axum::http::header::CONTENT_TYPE,
+                        axum::http::header::AUTHORIZATION,
+                        axum::http::header::HeaderName::from_static("x-requested-with"),
+                    ])
+                    .allow_credentials(true)
+            }),
+    )
 }
 
 // ============================================================================

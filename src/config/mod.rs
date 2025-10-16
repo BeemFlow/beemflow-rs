@@ -233,6 +233,22 @@ pub struct HttpConfig {
     /// Enable this when running behind a reverse proxy (Caddy, Nginx, etc.)
     #[serde(default, rename = "trustProxy")]
     pub trust_proxy: bool,
+
+    /// Enable HTTP REST API (default: true)
+    #[serde(default = "default_true", rename = "enableHttpApi")]
+    pub enable_http_api: bool,
+
+    /// Enable MCP over HTTP transport (default: true)
+    #[serde(default = "default_true", rename = "enableMcp")]
+    pub enable_mcp: bool,
+
+    /// Enable OAuth authorization server (default: false, opt-in)
+    #[serde(default, rename = "enableOauthServer")]
+    pub enable_oauth_server: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_host() -> String {
@@ -679,6 +695,9 @@ impl Default for Config {
                 secure: false,         // Default to false for local development
                 allowed_origins: None, // Defaults to localhost origins
                 trust_proxy: false,    // Default to false for local development
+                enable_http_api: true,
+                enable_mcp: true,
+                enable_oauth_server: false,
             }),
             log: Some(LogConfig {
                 level: Some("info".to_string()),

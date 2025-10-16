@@ -12,7 +12,7 @@ use axum::{
     extract::{Request, State},
     middleware::Next,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{any, get},
 };
 use rmcp::{
     ErrorData as McpError,
@@ -22,9 +22,21 @@ use rmcp::{
         ServerCapabilities, ServerInfo, Tool, ToolsCapability,
     },
     service::{RequestContext, RoleServer, ServiceExt},
+    transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    },
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
+use std::time::Duration;
+
+/// State required for MCP routes
+#[derive(Clone)]
+pub struct McpServerState {
+    pub operations: Arc<OperationRegistry>,
+    pub oauth_issuer: Option<String>, // None = no auth
+    pub storage: Arc<dyn Storage>,
+}
 
 /// MCP Server that exposes BeemFlow operations as tools
 pub struct McpServer {
@@ -85,8 +97,8 @@ impl McpServer {
     ///
     /// # Streamable HTTP Transport
     /// The single `/mcp` endpoint handles:
-    /// - POST: Send JSON-RPC messages, receive JSON or SSE stream responses
-    /// - GET: Open SSE stream for server-initiated messages
+    /// - POST: Send JSON-RPC messages, receive JSON responses or event streams
+    /// - GET: Open event stream for server-initiated messages
     /// - DELETE: Close session and clean up resources
     ///
     /// # Example
@@ -127,7 +139,7 @@ impl McpServer {
             storage,
             oauth_issuer: oauth_issuer.clone(),
         });
-        let metadata_state = Arc::new(McpServerState {
+        let metadata_state = Arc::new(McpMetadataState {
             base_url: format!("http://{}:{}", host, port),
             oauth_issuer,
         });
@@ -295,7 +307,7 @@ pub struct McpAuthState {
     pub oauth_issuer: String,
 }
 
-// OAuth middleware for MCP SSE
+// OAuth middleware for MCP
 pub async fn mcp_oauth_middleware(
     State(state): State<Arc<McpAuthState>>,
     request: Request,
@@ -335,12 +347,12 @@ pub async fn mcp_oauth_middleware(
 }
 
 // Protected Resource Metadata (RFC 9728)
-pub struct McpServerState {
+pub struct McpMetadataState {
     pub base_url: String,
     pub oauth_issuer: String,
 }
 
-async fn mcp_resource_metadata(State(state): State<Arc<McpServerState>>) -> Json<Value> {
+async fn mcp_resource_metadata(State(state): State<Arc<McpMetadataState>>) -> Json<Value> {
     Json(json!({
         "resource": format!("{}/mcp", state.base_url),
         "authorization_servers": [state.oauth_issuer],
@@ -349,9 +361,98 @@ async fn mcp_resource_metadata(State(state): State<Arc<McpServerState>>) -> Json
     }))
 }
 
-async fn root_resource_metadata(State(state): State<Arc<McpServerState>>) -> Json<Value> {
+async fn root_resource_metadata(State(state): State<Arc<McpMetadataState>>) -> Json<Value> {
     Json(json!({
         "resource": state.base_url,
         "authorization_servers": [state.oauth_issuer],
     }))
+}
+
+// ============================================================================
+// Route Builders (for integration into main HTTP server)
+// ============================================================================
+
+/// Create MCP routes with optional OAuth authentication
+///
+/// This creates the unified /mcp endpoint (POST/GET/DELETE) with optional
+/// Bearer token authentication. This function is exported for use by the
+/// main HTTP server to integrate MCP endpoints.
+///
+/// Uses the operations framework to auto-generate MCP tools from operation metadata.
+/// The single /mcp endpoint multiplexes all operations via JSON-RPC protocol, unlike
+/// HTTP which creates separate routes per operation.
+///
+/// # Arguments
+/// * `state` - MCP server state with optional OAuth configuration
+///
+/// # Returns
+/// Router with /mcp endpoint, optionally wrapped in OAuth middleware
+pub fn create_mcp_routes(state: Arc<McpServerState>) -> Router {
+    let mcp_server = McpServer::new(state.operations.clone());
+    let streamable_service = create_streamable_service(mcp_server);
+
+    let mut router = Router::new().route(
+        "/mcp",
+        any(move |req| async move { streamable_service.clone().handle(req).await }),
+    );
+
+    // Conditionally apply OAuth middleware if issuer is configured
+    if let Some(oauth_issuer) = state.oauth_issuer.clone() {
+        let auth_state = Arc::new(McpAuthState {
+            storage: state.storage.clone(),
+            oauth_issuer,
+        });
+
+        router = router.layer(axum::middleware::from_fn_with_state(
+            auth_state,
+            mcp_oauth_middleware,
+        ));
+    }
+
+    router
+}
+
+/// Create StreamableHttpService from McpServer
+fn create_streamable_service(
+    mcp_server: McpServer,
+) -> StreamableHttpService<McpServer, LocalSessionManager> {
+    let config = StreamableHttpServerConfig {
+        sse_keep_alive: Some(Duration::from_secs(15)),
+        stateful_mode: true,
+    };
+
+    StreamableHttpService::new(
+        move || Ok(mcp_server.clone()),
+        Arc::new(LocalSessionManager::default()),
+        config,
+    )
+}
+
+/// Create MCP metadata routes (RFC 9728)
+///
+/// Returns routes for OAuth protected resource metadata.
+/// These routes are PUBLIC (no auth required).
+///
+/// # Arguments
+/// * `oauth_issuer` - OAuth authorization server URL
+/// * `base_url` - Base URL of this server
+///
+/// # Returns
+/// Router with RFC 9728 metadata endpoints
+pub fn create_mcp_metadata_routes(oauth_issuer: String, base_url: String) -> Router {
+    let metadata_state = Arc::new(McpMetadataState {
+        base_url,
+        oauth_issuer,
+    });
+
+    Router::new()
+        .route(
+            "/.well-known/oauth-protected-resource/mcp",
+            get(mcp_resource_metadata),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(root_resource_metadata),
+        )
+        .with_state(metadata_state)
 }
