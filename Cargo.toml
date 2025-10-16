@@ -49,7 +49,15 @@ serde_with = "3"
 minijinja = { version = "2.12", features = ["builtins"] }
 
 # MCP - Official Rust SDK
-rmcp = { version = "0.8", features = ["server", "macros", "transport-io"] }
+rmcp = { version = "0.8", features = [
+    "server",                          # MCP server
+    "client",                          # MCP client (for manager)
+    "transport-io",                    # stdio (both)
+    "transport-child-process",         # child process transport
+    "transport-streamable-http-server",  # Streamable HTTP server (replaces deprecated SSE)
+    "macros",
+    "schemars",
+] }
 
 # Database & Storage
 sqlx = { version = "0.8", features = [

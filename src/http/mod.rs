@@ -320,21 +320,18 @@ fn build_operation_routes(state: &AppState) -> Router {
 
     // Use generated registration functions from each operation group
     // These functions call the http_route() method on each operation
-    Router::new()
-        .merge(crate::core::flows::flows::register_http_routes(
-            deps.clone(),
-        ))
-        .merge(crate::core::runs::runs::register_http_routes(deps.clone()))
-        .merge(crate::core::tools::tools::register_http_routes(
-            deps.clone(),
-        ))
-        .merge(crate::core::mcp::mcp::register_http_routes(deps.clone()))
-        .merge(crate::core::events::events::register_http_routes(
-            deps.clone(),
-        ))
-        .merge(crate::core::system::system::register_http_routes(
-            deps.clone(),
-        ))
+    [
+        crate::core::flows::flows::register_http_routes,
+        crate::core::runs::runs::register_http_routes,
+        crate::core::tools::tools::register_http_routes,
+        crate::core::mcp::mcp::register_http_routes,
+        crate::core::events::events::register_http_routes,
+        crate::core::system::system::register_http_routes,
+    ]
+    .into_iter()
+    .fold(Router::new(), |router, register_fn| {
+        router.merge(register_fn(deps.clone()))
+    })
 }
 
 /// Build the router with all endpoints

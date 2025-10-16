@@ -4,7 +4,16 @@
 //! Uses the official `rmcp` SDK with auto-generation from operation metadata.
 
 use crate::Result;
+use crate::auth::middleware::validate_token;
 use crate::core::OperationRegistry;
+use crate::storage::Storage;
+use axum::{
+    Json, Router,
+    extract::{Request, State},
+    middleware::Next,
+    response::{IntoResponse, Response},
+    routing::get,
+};
 use rmcp::{
     ErrorData as McpError,
     handler::server::ServerHandler,
@@ -14,7 +23,7 @@ use rmcp::{
     },
     service::{RequestContext, RoleServer, ServiceExt},
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 /// MCP Server that exposes BeemFlow operations as tools
@@ -51,22 +60,158 @@ impl McpServer {
         Ok(())
     }
 
+    /// Serves the MCP server over Streamable HTTP with OAuth authentication.
+    ///
+    /// Uses the MCP 2025-03-26 Streamable HTTP transport specification, which replaces
+    /// the deprecated HTTP+SSE transport from protocol version 2024-11-05.
+    ///
+    /// # Arguments
+    /// * `host` - Host address to bind to (e.g., "127.0.0.1")
+    /// * `port` - Port number to listen on
+    /// * `oauth_issuer` - OAuth authorization server URL for token validation
+    /// * `storage` - Storage backend for OAuth token validation
+    ///
+    /// # Security
+    /// Requires Bearer token authentication with `mcp` scope prefix.
+    /// Tokens are validated via the OAuth issuer and must have one of:
+    /// - `mcp` (full access)
+    /// - `mcp:read` (read-only)
+    /// - `mcp:write` (write access)
+    ///
+    /// # Endpoints
+    /// - `POST/GET/DELETE /mcp` - Unified MCP endpoint (Streamable HTTP)
+    /// - `GET /.well-known/oauth-protected-resource/mcp` - RFC 9728 metadata
+    /// - `GET /.well-known/oauth-protected-resource` - Root metadata
+    ///
+    /// # Streamable HTTP Transport
+    /// The single `/mcp` endpoint handles:
+    /// - POST: Send JSON-RPC messages, receive JSON or SSE stream responses
+    /// - GET: Open SSE stream for server-initiated messages
+    /// - DELETE: Close session and clean up resources
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use beemflow::mcp::McpServer;
+    /// # use beemflow::core::OperationRegistry;
+    /// # use beemflow::utils::TestEnvironment;
+    /// # use std::sync::Arc;
+    /// # #[tokio::main]
+    /// # async fn main() -> beemflow::Result<()> {
+    /// # let env = TestEnvironment::new().await;
+    /// # let ops = Arc::new(OperationRegistry::new(env.deps.clone()));
+    /// # let server = McpServer::new(ops);
+    /// server.serve_http(
+    ///     "127.0.0.1",
+    ///     3001,
+    ///     "http://localhost:3000".to_string(),
+    ///     env.deps.storage,
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn serve_http(
+        &self,
+        host: &str,
+        port: u16,
+        oauth_issuer: String,
+        storage: Arc<dyn Storage>,
+    ) -> Result<()> {
+        use rmcp::transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        };
+        use std::time::Duration;
+
+        tracing::info!("Starting MCP server (Streamable HTTP) on {}:{}", host, port);
+
+        let auth_state = Arc::new(McpAuthState {
+            storage,
+            oauth_issuer: oauth_issuer.clone(),
+        });
+        let metadata_state = Arc::new(McpServerState {
+            base_url: format!("http://{}:{}", host, port),
+            oauth_issuer,
+        });
+
+        let addr: std::net::SocketAddr = format!("{}:{}", host, port)
+            .parse()
+            .map_err(|e| crate::BeemFlowError::config(format!("Invalid address: {}", e)))?;
+
+        // Create StreamableHttpService with default local session manager
+        let streamable_config = StreamableHttpServerConfig {
+            sse_keep_alive: Some(Duration::from_secs(15)),
+            stateful_mode: true, // Enable sessions for persistent connections
+        };
+
+        let mcp_handler = self.clone();
+        let streamable_service = StreamableHttpService::new(
+            move || Ok(mcp_handler.clone()),
+            Arc::new(LocalSessionManager::default()),
+            streamable_config,
+        );
+
+        // Wrap MCP service with OAuth middleware
+        let mcp_route = Router::new()
+            .route(
+                "/mcp",
+                axum::routing::any(move |req| async move {
+                    streamable_service.clone().handle(req).await
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                auth_state,
+                mcp_oauth_middleware,
+            ));
+
+        // Add metadata routes
+        let metadata_routes = Router::new()
+            .route(
+                "/.well-known/oauth-protected-resource/mcp",
+                get(mcp_resource_metadata),
+            )
+            .route(
+                "/.well-known/oauth-protected-resource",
+                get(root_resource_metadata),
+            )
+            .with_state(metadata_state);
+
+        let app = Router::new().merge(mcp_route).merge(metadata_routes);
+
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .map_err(|e| crate::BeemFlowError::config(format!("Failed to bind {}: {}", addr, e)))?;
+
+        tracing::info!("✅ MCP Streamable HTTP server running on http://{}", addr);
+        tracing::info!("   Unified endpoint: http://{}/mcp (POST/GET/DELETE)", addr);
+        tracing::info!(
+            "   OAuth metadata: http://{}/.well-known/oauth-protected-resource/mcp",
+            addr
+        );
+        tracing::info!("   Authorization: Bearer token with 'mcp' scope required");
+        tracing::info!("   Transport: MCP 2025-03-26 Streamable HTTP (replaces deprecated SSE)");
+
+        axum::serve(listener, app)
+            .await
+            .map_err(|e| crate::BeemFlowError::internal(format!("Server error: {}", e)))?;
+
+        Ok(())
+    }
+
     /// Auto-generate MCP tools from operation metadata using generated registration functions
     fn get_tools_list(&self) -> Vec<Tool> {
         let deps = self.operations.get_dependencies();
-        let mut tools = Vec::new();
 
         // Call generated registration functions from each operation group
-        tools.extend(crate::core::flows::flows::register_mcp_tools(deps.clone()));
-        tools.extend(crate::core::runs::runs::register_mcp_tools(deps.clone()));
-        tools.extend(crate::core::tools::tools::register_mcp_tools(deps.clone()));
-        tools.extend(crate::core::mcp::mcp::register_mcp_tools(deps.clone()));
-        tools.extend(crate::core::events::events::register_mcp_tools(
-            deps.clone(),
-        ));
-        tools.extend(crate::core::system::system::register_mcp_tools(
-            deps.clone(),
-        ));
+        let mut tools: Vec<Tool> = [
+            crate::core::flows::flows::register_mcp_tools,
+            crate::core::runs::runs::register_mcp_tools,
+            crate::core::tools::tools::register_mcp_tools,
+            crate::core::mcp::mcp::register_mcp_tools,
+            crate::core::events::events::register_mcp_tools,
+            crate::core::system::system::register_mcp_tools,
+        ]
+        .into_iter()
+        .flat_map(|register_fn| register_fn(deps.clone()))
+        .collect();
 
         // Sort tools by name for consistent output
         tools.sort_by(|a, b| a.name.cmp(&b.name));
@@ -141,4 +286,72 @@ impl ServerHandler for McpServer {
             }
         }
     }
+}
+
+// OAuth middleware state for MCP
+#[derive(Clone)]
+pub struct McpAuthState {
+    pub storage: Arc<dyn Storage>,
+    pub oauth_issuer: String,
+}
+
+// OAuth middleware for MCP SSE
+pub async fn mcp_oauth_middleware(
+    State(state): State<Arc<McpAuthState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let token = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "));
+
+    let Some(token) = token else {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            [(
+                axum::http::header::WWW_AUTHENTICATE,
+                format!(
+                    "Bearer realm=\"BeemFlow MCP\", \
+                         resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\", \
+                         scope=\"mcp\"",
+                    state.oauth_issuer
+                ),
+            )],
+            "Unauthorized",
+        )
+            .into_response();
+    };
+
+    match validate_token(&state.storage, token).await {
+        Ok(user) if user.scopes.iter().any(|s| s.starts_with("mcp")) => next.run(request).await,
+        Ok(_) => (axum::http::StatusCode::FORBIDDEN, "Insufficient scopes").into_response(),
+        Err(e) => {
+            tracing::warn!("MCP OAuth failed: {}", e);
+            (axum::http::StatusCode::UNAUTHORIZED, "Invalid token").into_response()
+        }
+    }
+}
+
+// Protected Resource Metadata (RFC 9728)
+pub struct McpServerState {
+    pub base_url: String,
+    pub oauth_issuer: String,
+}
+
+async fn mcp_resource_metadata(State(state): State<Arc<McpServerState>>) -> Json<Value> {
+    Json(json!({
+        "resource": format!("{}/mcp", state.base_url),
+        "authorization_servers": [state.oauth_issuer],
+        "scopes_supported": ["mcp", "mcp:read", "mcp:write"],
+        "bearer_methods_supported": ["header"],
+    }))
+}
+
+async fn root_resource_metadata(State(state): State<Arc<McpServerState>>) -> Json<Value> {
+    Json(json!({
+        "resource": state.base_url,
+        "authorization_servers": [state.oauth_issuer],
+    }))
 }

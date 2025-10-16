@@ -87,12 +87,16 @@ impl OperationRegistry {
 
         // Auto-register all operations by group
         // The macro-generated register_all functions expect Arc<Dependencies>
-        flows::flows::register_all(&mut registry, deps.clone());
-        runs::runs::register_all(&mut registry, deps.clone());
-        events::events::register_all(&mut registry, deps.clone());
-        tools::tools::register_all(&mut registry, deps.clone());
-        mcp::mcp::register_all(&mut registry, deps.clone());
-        system::system::register_all(&mut registry, deps.clone());
+        [
+            flows::flows::register_all,
+            runs::runs::register_all,
+            events::events::register_all,
+            tools::tools::register_all,
+            mcp::mcp::register_all,
+            system::system::register_all,
+        ]
+        .into_iter()
+        .for_each(|register_fn| register_fn(&mut registry, deps.clone()));
 
         registry
     }

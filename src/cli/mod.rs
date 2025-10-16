@@ -4,11 +4,29 @@
 //! Uses the same DRY approach as HTTP routes and MCP tools.
 
 use crate::Result;
+use crate::auth::server::generate_client_secret;
 use crate::config::Config;
 use crate::core::{OperationMetadata, OperationRegistry};
-use clap::{Arg, ArgAction, ArgMatches, Command};
+use crate::model::OAuthClient;
+use chrono::Utc;
+use clap::{Arg, ArgAction, ArgMatches, Command, ValueEnum};
 use serde_json::Value;
 use std::collections::HashMap;
+
+/// MCP transport options
+#[derive(ValueEnum, Clone, Debug)]
+enum McpTransport {
+    Stdio,
+    Sse,
+}
+
+/// Parse a comma-separated list from CLI arguments
+fn parse_comma_list(matches: &ArgMatches, key: &str) -> Vec<String> {
+    matches
+        .get_one::<String>(key)
+        .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
+        .unwrap_or_default()
+}
 
 /// Convert String to 'static str for CLI command building
 ///
@@ -57,9 +75,23 @@ pub async fn run() -> Result<()> {
         }
         Some(("mcp", sub_matches)) => {
             if let Some(("serve", mcp_serve_matches)) = sub_matches.subcommand() {
-                let stdio = mcp_serve_matches.get_flag("stdio");
-                return serve_mcp(stdio).await;
+                let transport = mcp_serve_matches
+                    .get_one::<McpTransport>("transport")
+                    .cloned()
+                    .unwrap_or(McpTransport::Stdio);
+                let host = mcp_serve_matches
+                    .get_one::<String>("host")
+                    .map(|s| s.as_str())
+                    .unwrap_or("127.0.0.1");
+                let port = mcp_serve_matches
+                    .get_one::<String>("port")
+                    .and_then(|s| s.parse::<u16>().ok())
+                    .unwrap_or(3001);
+                return serve_mcp(transport, host, port).await;
             }
+        }
+        Some(("oauth", sub_matches)) => {
+            return handle_oauth_command(sub_matches).await;
         }
         _ => {}
     }
@@ -90,7 +122,7 @@ fn build_cli(registry: &OperationRegistry) -> Command {
     app = app
         .subcommand(
             Command::new("serve")
-                .about("Start the HTTP server")
+                .about("Start HTTP server")
                 .arg(
                     Arg::new("host")
                         .long("host")
@@ -105,7 +137,33 @@ fn build_cli(registry: &OperationRegistry) -> Command {
                         .help("Port to bind to"),
                 ),
         )
-        .subcommand(Command::new("cron").about("Run cron checks"));
+        .subcommand(Command::new("cron").about("Run cron checks"))
+        .subcommand(
+            Command::new("oauth")
+                .about("OAuth client management")
+                .subcommand(
+                    Command::new("create-client")
+                        .about("Create OAuth client")
+                        .arg(Arg::new("name").long("name").required(true))
+                        .arg(
+                            Arg::new("grant-types")
+                                .long("grant-types")
+                                .default_value("client_credentials"),
+                        )
+                        .arg(Arg::new("scopes").long("scopes").default_value("mcp"))
+                        .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                )
+                .subcommand(
+                    Command::new("list-clients")
+                        .about("List OAuth clients")
+                        .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                )
+                .subcommand(
+                    Command::new("revoke-client")
+                        .about("Revoke OAuth client")
+                        .arg(Arg::new("client-id").required(true).index(1)),
+                ),
+        );
 
     // Build operation commands from metadata
     add_operation_commands(app, registry)
@@ -156,13 +214,16 @@ fn add_operation_commands(mut app: Command, registry: &OperationRegistry) -> Com
         if group_name == "mcp" {
             group_cmd = group_cmd.subcommand(
                 Command::new("serve")
-                    .about("Start MCP server (expose BeemFlow as MCP tools)")
+                    .about("Start MCP server")
                     .arg(
-                        Arg::new("stdio")
-                            .long("stdio")
-                            .action(ArgAction::SetTrue)
-                            .help("Use stdio transport (default)"),
-                    ),
+                        Arg::new("transport")
+                            .long("transport")
+                            .value_parser(clap::value_parser!(McpTransport))
+                            .default_value("stdio")
+                            .help("Transport: stdio or sse"),
+                    )
+                    .arg(Arg::new("host").long("host").default_value("127.0.0.1"))
+                    .arg(Arg::new("port").long("port").default_value("3001")),
             );
         }
 
@@ -346,23 +407,118 @@ async fn serve_http(host: &str, port: u16) -> Result<()> {
 }
 
 /// Start MCP server (special command - not an operation)
-async fn serve_mcp(_stdio: bool) -> Result<()> {
-    println!("🚀 Starting BeemFlow MCP server");
-    println!("   Exposes BeemFlow operations as MCP tools");
-    println!("   Press Ctrl+C to stop\n");
-
-    // Create registry and MCP server
+async fn serve_mcp(transport: McpTransport, host: &str, port: u16) -> Result<()> {
     let registry = create_registry().await?;
     let mcp_server = crate::mcp::McpServer::new(std::sync::Arc::new(registry));
 
-    // Start MCP server on stdio
-    mcp_server.serve_stdio().await?;
+    match transport {
+        McpTransport::Stdio => {
+            // CRITICAL: For stdio transport, stdout is reserved for JSON-RPC messages.
+            // All diagnostic output MUST go to stderr to avoid corrupting the protocol.
+            // Use eprintln!() or tracing (which logs to stderr by default)
+            eprintln!("Starting MCP server (stdio transport)");
+            eprintln!("Ready for JSON-RPC messages on stdin/stdout");
 
+            mcp_server.serve_stdio().await?;
+        }
+        McpTransport::Sse => {
+            println!("🚀 Starting MCP server (Streamable HTTP transport with OAuth)");
+            let config = Config::load_and_inject(crate::constants::CONFIG_FILE_NAME)?;
+            let oauth_issuer = config
+                .http
+                .as_ref()
+                .map(|c| format!("http://{}:{}", c.host, c.port))
+                .unwrap_or_else(|| "http://127.0.0.1:3000".to_string());
+
+            let deps = crate::core::create_dependencies(&config).await?;
+
+            println!("   OAuth issuer: {}", oauth_issuer);
+            println!("   Create client: flow oauth create-client --name \"Claude Desktop\"");
+            println!("   Using MCP 2025-03-26 Streamable HTTP transport");
+
+            mcp_server
+                .serve_http(host, port, oauth_issuer, deps.storage)
+                .await?;
+        }
+    }
     Ok(())
 }
 
 /// Run cron check (special command - not an operation)
 async fn run_cron_check() -> Result<()> {
     eprintln!("Cron functionality temporarily disabled during refactoring");
+    Ok(())
+}
+
+/// Handle OAuth commands (special command - not an operation)
+async fn handle_oauth_command(matches: &ArgMatches) -> Result<()> {
+    let config = Config::load_and_inject(crate::constants::CONFIG_FILE_NAME)?;
+    let storage = crate::storage::create_storage_from_config(&config.storage).await?;
+
+    match matches.subcommand() {
+        Some(("create-client", sub)) => {
+            let name = sub.get_one::<String>("name").unwrap();
+            let grant_types = parse_comma_list(sub, "grant-types");
+            let scopes = parse_comma_list(sub, "scopes");
+            let json = sub.get_flag("json");
+
+            let client_id = format!(
+                "{}-{}",
+                name.to_lowercase().replace(' ', "-"),
+                Utc::now().format("%Y%m%d%H%M%S")
+            );
+            let client_secret = generate_client_secret();
+
+            let client = OAuthClient {
+                id: client_id.clone(),
+                secret: client_secret.clone(),
+                name: name.clone(),
+                redirect_uris: vec![],
+                grant_types,
+                response_types: vec!["code".to_string()],
+                scope: scopes.join(" "),
+                client_uri: None,
+                logo_uri: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            };
+
+            storage.save_oauth_client(&client).await?;
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                    }))?
+                );
+            } else {
+                println!("\n✅ OAuth client created!");
+                println!("Client ID:     {}", client_id);
+                println!("Client Secret: {}", client_secret);
+                println!("\nUse these in Claude/ChatGPT settings");
+            }
+        }
+        Some(("list-clients", sub)) => {
+            let json = sub.get_flag("json");
+            let clients = storage.list_oauth_clients().await?;
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&clients)?);
+            } else {
+                println!("\nOAuth Clients:");
+                for client in clients {
+                    println!("  {} ({})", client.name, client.id);
+                }
+            }
+        }
+        Some(("revoke-client", sub)) => {
+            let client_id = sub.get_one::<String>("client-id").unwrap();
+            storage.delete_oauth_client(client_id).await?;
+            println!("✅ Client '{}' revoked", client_id);
+        }
+        _ => {}
+    }
     Ok(())
 }

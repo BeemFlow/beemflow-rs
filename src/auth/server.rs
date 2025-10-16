@@ -124,6 +124,8 @@ struct AuthorizeRequest {
 struct TokenRequest {
     grant_type: String,
     #[serde(default)]
+    resource: Option<String>, // RFC 8707: Resource Indicators
+    #[serde(default)]
     code: Option<String>,
     #[serde(default)]
     redirect_uri: Option<String>,
@@ -726,6 +728,21 @@ async fn handle_token(
     State(state): State<Arc<OAuthServerState>>,
     axum::Form(req): axum::Form<TokenRequest>,
 ) -> Response {
+    // Validate resource parameter if provided (RFC 8707)
+    if let Some(ref resource) = req.resource {
+        // Resource should be an MCP endpoint URL
+        if !resource.contains("/mcp") {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "invalid_target",
+                    "error_description": format!("Invalid resource indicator: {}. Must be an MCP endpoint.", resource)
+                })),
+            ).into_response();
+        }
+        tracing::debug!("Token request for resource: {}", resource);
+    }
+
     match req.grant_type.as_str() {
         "authorization_code" => handle_authorization_code_grant(state, req).await,
         "refresh_token" => handle_refresh_token_grant(state, req).await,
@@ -1070,7 +1087,7 @@ fn is_valid_redirect_uri(uri: &str, allow_localhost: bool) -> bool {
 }
 
 /// Generate secure client secret (using cryptographically secure RNG)
-fn generate_client_secret() -> String {
+pub fn generate_client_secret() -> String {
     use rand::RngCore;
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
@@ -1086,7 +1103,7 @@ fn generate_authorization_code() -> String {
 }
 
 /// Generate access token (using cryptographically secure RNG)
-fn generate_access_token() -> String {
+pub fn generate_access_token() -> String {
     use rand::RngCore;
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
