@@ -9,18 +9,9 @@ use crate::config::Config;
 use crate::core::{OperationMetadata, OperationRegistry};
 use crate::model::OAuthClient;
 use chrono::Utc;
-use clap::{Arg, ArgAction, ArgMatches, Command, ValueEnum};
+use clap::{Arg, ArgAction, ArgMatches, Command};
 use serde_json::Value;
 use std::collections::HashMap;
-
-/// MCP transport options
-#[derive(ValueEnum, Clone, Debug)]
-enum McpTransport {
-    /// stdio transport for local process communication (Claude Desktop)
-    Stdio,
-    /// Streamable HTTP transport (MCP 2025-03-26 spec) for remote access
-    Http,
-}
 
 /// Parse a comma-separated list from CLI arguments
 fn parse_comma_list(matches: &ArgMatches, key: &str) -> Vec<String> {
@@ -69,23 +60,6 @@ pub async fn run() -> Result<()> {
         }
         Some(("cron", _)) => {
             return run_cron_check().await;
-        }
-        Some(("mcp", sub_matches)) => {
-            if let Some(("serve", mcp_serve_matches)) = sub_matches.subcommand() {
-                let transport = mcp_serve_matches
-                    .get_one::<McpTransport>("transport")
-                    .cloned()
-                    .unwrap_or(McpTransport::Stdio);
-                let host = mcp_serve_matches
-                    .get_one::<String>("host")
-                    .map(|s| s.as_str())
-                    .unwrap_or("127.0.0.1");
-                let port = mcp_serve_matches
-                    .get_one::<String>("port")
-                    .and_then(|s| s.parse::<u16>().ok())
-                    .unwrap_or(3001);
-                return serve_mcp(transport, host, port).await;
-            }
         }
         Some(("oauth", sub_matches)) => {
             return handle_oauth_command(sub_matches).await;
@@ -235,23 +209,6 @@ fn add_operation_commands(mut app: Command, registry: &OperationRegistry) -> Com
                 let cmd = build_operation_command(op_name, meta, subcmd_name);
                 group_cmd = group_cmd.subcommand(cmd);
             }
-        }
-
-        // Add special "mcp serve" subcommand to the mcp group
-        if group_name == "mcp" {
-            group_cmd = group_cmd.subcommand(
-                Command::new("serve")
-                    .about("Start MCP server")
-                    .arg(
-                        Arg::new("transport")
-                            .long("transport")
-                            .value_parser(clap::value_parser!(McpTransport))
-                            .default_value("stdio")
-                            .help("Transport: stdio or http"),
-                    )
-                    .arg(Arg::new("host").long("host").default_value("127.0.0.1"))
-                    .arg(Arg::new("port").long("port").default_value("3001")),
-            );
         }
 
         app = app.subcommand(group_cmd);
@@ -544,44 +501,6 @@ async fn serve_mcp_stdio() -> Result<()> {
     let mcp_server = crate::mcp::McpServer::new(registry);
 
     mcp_server.serve_stdio().await
-}
-
-/// Start MCP server (special command - not an operation)
-async fn serve_mcp(transport: McpTransport, host: &str, port: u16) -> Result<()> {
-    let registry = create_registry().await?;
-    let mcp_server = crate::mcp::McpServer::new(std::sync::Arc::new(registry));
-
-    match transport {
-        McpTransport::Stdio => {
-            // CRITICAL: For stdio transport, stdout is reserved for JSON-RPC messages.
-            // All diagnostic output MUST go to stderr to avoid corrupting the protocol.
-            // Use eprintln!() or tracing (which logs to stderr by default)
-            eprintln!("Starting MCP server (stdio transport)");
-            eprintln!("Ready for JSON-RPC messages on stdin/stdout");
-
-            mcp_server.serve_stdio().await?;
-        }
-        McpTransport::Http => {
-            println!("🚀 Starting MCP server (Streamable HTTP transport with OAuth)");
-            let config = Config::load_and_inject(crate::constants::CONFIG_FILE_NAME)?;
-            let oauth_issuer = config
-                .http
-                .as_ref()
-                .map(|c| format!("http://{}:{}", c.host, c.port))
-                .unwrap_or_else(|| "http://127.0.0.1:3000".to_string());
-
-            let deps = crate::core::create_dependencies(&config).await?;
-
-            println!("   OAuth issuer: {}", oauth_issuer);
-            println!("   Create client: flow oauth create-client --name \"Claude Desktop\"");
-            println!("   Using MCP 2025-03-26 Streamable HTTP transport");
-
-            mcp_server
-                .serve_http(host, port, oauth_issuer, deps.storage)
-                .await?;
-        }
-    }
-    Ok(())
 }
 
 /// Run cron check (special command - not an operation)

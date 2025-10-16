@@ -156,29 +156,57 @@ pub mod tools {
         type Output = Value;
 
         async fn execute(&self, input: Self::Input) -> Result<Self::Output> {
-            // Get tool from registry
-            let tool_name = input.name.as_ref().ok_or_else(|| {
-                BeemFlowError::validation("Either name or manifest must be provided")
-            })?;
+            match (input.name, input.manifest) {
+                (Some(name), None) => {
+                    // Install from registry by name
+                    let tool_entry = self
+                        .deps
+                        .registry_manager
+                        .get_server(&name)
+                        .await?
+                        .ok_or_else(|| not_found("Tool", &name))?;
 
-            let tool_entry = self
-                .deps
-                .registry_manager
-                .get_server(tool_name)
-                .await?
-                .ok_or_else(|| not_found("Tool", tool_name))?;
+                    if tool_entry.entry_type != "tool" {
+                        return Err(type_mismatch(&name, "tool", &tool_entry.entry_type));
+                    }
 
-            if tool_entry.entry_type != "tool" {
-                return Err(type_mismatch(tool_name, "tool", &tool_entry.entry_type));
+                    Ok(serde_json::json!({
+                        "status": "installed",
+                        "name": name,
+                        "type": "tool",
+                        "endpoint": tool_entry.endpoint
+                    }))
+                }
+                (None, Some(manifest)) => {
+                    // Install from manifest
+                    let tool_name = manifest
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .ok_or_else(|| {
+                            BeemFlowError::validation("Tool manifest must have a 'name' field")
+                        })?
+                        .to_string();
+
+                    // Register the tool in the local registry
+                    self.deps
+                        .registry_manager
+                        .register_tool_from_manifest(manifest)
+                        .await?;
+
+                    Ok(serde_json::json!({
+                        "status": "installed",
+                        "name": tool_name,
+                        "type": "tool",
+                        "source": "manifest"
+                    }))
+                }
+                (Some(_), Some(_)) => Err(BeemFlowError::validation(
+                    "Provide either 'name' or 'manifest', not both",
+                )),
+                (None, None) => Err(BeemFlowError::validation(
+                    "Either 'name' or 'manifest' must be provided",
+                )),
             }
-
-            // Note: Tool registration as HTTP adapter happens through the registry manager
-            Ok(serde_json::json!({
-                "status": "installed",
-                "name": tool_name,
-                "type": "tool",
-                "endpoint": tool_entry.endpoint
-            }))
         }
     }
 

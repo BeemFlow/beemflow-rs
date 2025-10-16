@@ -4,8 +4,8 @@
       "type": "stdio",
       "command": "/Users/alec/.cargo/bin/flow",
       "args": [
-        "mcp",
-        "serve"
+        "serve",
+        "--mcp-stdio"
       ],
       "env": {}
     }

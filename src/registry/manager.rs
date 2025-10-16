@@ -68,7 +68,7 @@ impl RegistryManager {
     }
 
     /// Create standard manager with all registry types
-    /// Priority: local → remote → hub → default
+    /// Priority: local #1 → hub.beemflow.com #2 → default #3
     pub fn standard(config: Option<&Config>) -> Self {
         let mut registries: Vec<Box<dyn RegistrySource>> = Vec::new();
 
@@ -82,33 +82,13 @@ impl RegistryManager {
 
         registries.push(Box::new(LocalRegistry::new(local_path)));
 
-        // 2. Remote registries from config
-        if let Some(cfg) = config
-            && let Some(ref regs) = cfg.registries
-        {
-            for reg in regs {
-                if reg.registry_type == "remote"
-                    && let Some(ref url) = reg.url
-                {
-                    registries.push(Box::new(RemoteRegistry::new(url, "remote")));
-                }
-            }
-        }
+        // 2. Hub registry (community curated at hub.beemflow.com)
+        registries.push(Box::new(RemoteRegistry::new(
+            "https://hub.beemflow.com/registry.json",
+            "hub",
+        )));
 
-        // 3. Smithery if API key available (disabled by default)
-        // if let Ok(api_key) = std::env::var(crate::constants::ENV_SMITHERY_KEY) {
-        //     if !api_key.is_empty() {
-        //         registries.push(Box::new(SmitheryRegistry::new(Some(api_key))));
-        //     }
-        // }
-
-        // 4. Hub registry (community curated) - disabled by default
-        // registries.push(Box::new(RemoteRegistry::new(
-        //     "https://hub.beemflow.com/index.json",
-        //     "hub"
-        // )));
-
-        // 5. Default registry (lowest priority)
+        // 3. Default registry (built-in, lowest priority)
         registries.push(Box::new(DefaultRegistry::new()));
 
         Self { registries }
@@ -215,5 +195,30 @@ impl RegistryManager {
             tracing::warn!("No server entry found for '{}'", name);
         }
         Ok(None)
+    }
+
+    /// Register a tool from a manifest in the local registry
+    pub async fn register_tool_from_manifest(&self, manifest: serde_json::Value) -> Result<()> {
+        // Deserialize manifest to RegistryEntry
+        let mut entry: RegistryEntry = serde_json::from_value(manifest).map_err(|e| {
+            crate::error::BeemFlowError::validation(format!("Invalid tool manifest: {}", e))
+        })?;
+
+        // Ensure it's a tool
+        if entry.entry_type != "tool" {
+            return Err(crate::error::BeemFlowError::validation(format!(
+                "Expected type 'tool', got '{}'",
+                entry.entry_type
+            )));
+        }
+
+        // Mark as local registry
+        entry.registry = Some("local".to_string());
+
+        // Use the default local registry path (~/.beemflow/registry.json)
+        let local_path = crate::constants::default_local_registry_path();
+        let local_registry = LocalRegistry::new(local_path);
+        local_registry.upsert_entry(entry).await?;
+        Ok(())
     }
 }

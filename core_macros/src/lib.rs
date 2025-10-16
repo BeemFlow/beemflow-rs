@@ -90,11 +90,22 @@ pub fn operation_group(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mcp_tool_calls = operation_structs.iter().map(|struct_name| {
         quote! {
             {
-                let tool = rmcp::model::Tool::new(
+                let metadata = #struct_name::metadata();
+
+                // Determine if tool is read-only based on HTTP method
+                let is_read_only = matches!(metadata.http_method, Some("GET"));
+
+                let mut tool = rmcp::model::Tool::new(
                     std::borrow::Cow::Owned(format!("beemflow_{}", #struct_name::OPERATION_NAME)),
                     std::borrow::Cow::Owned(#struct_name::DESCRIPTION.to_string()),
-                    std::sync::Arc::new(#struct_name::metadata().schema),
+                    std::sync::Arc::new(metadata.schema),
                 );
+
+                // Add annotations with read_only_hint
+                tool.annotations = Some(
+                    rmcp::model::ToolAnnotations::new().read_only(is_read_only)
+                );
+
                 tools.push(tool);
             }
         }

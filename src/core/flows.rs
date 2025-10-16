@@ -42,8 +42,10 @@ pub mod flows {
         #[schemars(description = "Name of the flow (optional, can be inferred from content)")]
         pub name: Option<String>,
         #[schemars(description = "YAML content of the flow definition")]
-        pub content: Option<String>,
-        #[schemars(description = "Path to flow file (alternative to content)")]
+        pub content: String,
+        /// Path to flow file - only for CLI use, hidden from MCP/HTTP schema
+        #[serde(default)]
+        #[schemars(skip)]
         pub file: Option<String>,
     }
 
@@ -157,18 +159,22 @@ pub mod flows {
     #[derive(Deserialize, JsonSchema)]
     #[schemars(description = "Input for validating a flow")]
     pub struct ValidateInput {
-        #[schemars(description = "Name of the flow (if loading from storage)")]
-        pub name: Option<String>,
-        #[schemars(description = "Path to flow file (if loading from file system)")]
+        #[schemars(description = "Name of the flow to load from storage")]
+        pub name: String,
+        /// Path to flow file - only for CLI use, hidden from MCP/HTTP schema
+        #[serde(default)]
+        #[schemars(skip)]
         pub file: Option<String>,
     }
 
     #[derive(Deserialize, JsonSchema)]
     #[schemars(description = "Input for generating a Mermaid diagram")]
     pub struct GraphInput {
-        #[schemars(description = "Name of the flow (if loading from storage)")]
-        pub name: Option<String>,
-        #[schemars(description = "Path to flow file (if loading from file system)")]
+        #[schemars(description = "Name of the flow to load from storage")]
+        pub name: String,
+        /// Path to flow file - only for CLI use, hidden from MCP/HTTP schema
+        #[serde(default)]
+        #[schemars(skip)]
         pub file: Option<String>,
     }
 
@@ -249,7 +255,7 @@ pub mod flows {
         name = "save_flow",
         input = SaveInput,
         http = "POST /flows",
-        cli = "flows save <NAME> [--content <CONTENT>] [--file <FILE>]",
+        cli = "flows save [NAME] [--content <CONTENT>] [--file <FILE>]",
         description = "Save or update a flow definition"
     )]
     pub struct Save {
@@ -262,20 +268,13 @@ pub mod flows {
         type Output = SaveOutput;
 
         async fn execute(&self, input: Self::Input) -> Result<Self::Output> {
-            // Get content from either content or file
-            let content = match (input.content, input.file) {
-                (Some(c), None) => c,
-                (None, Some(f)) => tokio::fs::read_to_string(&f).await?,
-                (Some(_), Some(_)) => {
-                    return Err(BeemFlowError::validation(
-                        "Cannot specify both content and file",
-                    ));
-                }
-                (None, None) => {
-                    return Err(BeemFlowError::validation(
-                        "Must specify either content or file",
-                    ));
-                }
+            // Get content - either from content field or read from file (CLI only)
+            let content = if let Some(file_path) = input.file {
+                // CLI path: read from file
+                tokio::fs::read_to_string(&file_path).await?
+            } else {
+                // MCP/HTTP path: use content directly
+                input.content
             };
 
             // Parse and validate the flow
@@ -664,7 +663,7 @@ pub mod flows {
         async fn execute(&self, input: Self::Input) -> Result<Self::Output> {
             let flow = super::load_flow_from_config(
                 &self.deps.config,
-                input.name.as_deref(),
+                Some(&input.name),
                 input.file.as_deref(),
             )
             .await?;
@@ -697,7 +696,7 @@ pub mod flows {
         async fn execute(&self, input: Self::Input) -> Result<Self::Output> {
             let flow = super::load_flow_from_config(
                 &self.deps.config,
-                input.name.as_deref(),
+                Some(&input.name),
                 input.file.as_deref(),
             )
             .await?;
