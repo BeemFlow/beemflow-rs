@@ -213,6 +213,7 @@ pub async fn start_server(config: Config, interfaces: ServerInterfaces) -> Resul
         enable_http_api: true,
         enable_mcp: true,
         enable_oauth_server: false,
+        oauth_issuer: None,
     });
 
     // Use centralized dependency creation from core module
@@ -250,7 +251,10 @@ pub async fn start_server(config: Config, interfaces: ServerInterfaces) -> Resul
 
     // Create OAuth server state
     let oauth_config = OAuthConfig {
-        issuer: format!("http://{}:{}", http_config.host, http_config.port),
+        issuer: http_config
+            .oauth_issuer
+            .clone()
+            .unwrap_or_else(|| format!("http://{}:{}", http_config.host, http_config.port)),
         ..Default::default()
     };
 
@@ -387,7 +391,12 @@ fn build_router(
     // MCP routes (conditionally enabled)
     if interfaces.mcp {
         let oauth_issuer = if interfaces.oauth_server {
-            Some(format!("http://{}:{}", http_config.host, http_config.port))
+            Some(
+                http_config
+                    .oauth_issuer
+                    .clone()
+                    .unwrap_or_else(|| format!("http://{}:{}", http_config.host, http_config.port)),
+            )
         } else {
             None
         };
@@ -403,7 +412,10 @@ fn build_router(
 
         // Add MCP metadata routes if OAuth is enabled
         if let Some(issuer) = oauth_issuer {
-            let base_url = format!("http://{}:{}", http_config.host, http_config.port);
+            let base_url = http_config
+                .oauth_issuer
+                .clone()
+                .unwrap_or_else(|| format!("http://{}:{}", http_config.host, http_config.port));
             let metadata_routes = create_mcp_metadata_routes(issuer, base_url);
             app = app.merge(metadata_routes);
         }

@@ -245,6 +245,11 @@ pub struct HttpConfig {
     /// Enable OAuth authorization server (default: false, opt-in)
     #[serde(default, rename = "enableOauthServer")]
     pub enable_oauth_server: bool,
+
+    /// OAuth issuer URL (e.g., https://your-domain.com)
+    /// If not set, defaults to http://host:port
+    #[serde(skip_serializing_if = "Option::is_none", rename = "oauthIssuer")]
+    pub oauth_issuer: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -698,6 +703,7 @@ impl Default for Config {
                 enable_http_api: true,
                 enable_mcp: true,
                 enable_oauth_server: false,
+                oauth_issuer: None, // Auto-generated from host:port if not set
             }),
             log: Some(LogConfig {
                 level: Some("info".to_string()),

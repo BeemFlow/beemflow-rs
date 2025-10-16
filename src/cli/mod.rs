@@ -145,6 +145,12 @@ fn build_cli(registry: &OperationRegistry) -> Command {
                         .help("Enable OAuth authorization server (wraps MCP with auth)"),
                 )
                 .arg(
+                    Arg::new("oauth-issuer")
+                        .long("oauth-issuer")
+                        .value_name("URL")
+                        .help("OAuth issuer URL (e.g., https://your-domain.com). Required for ChatGPT/external clients. Defaults to http://host:port"),
+                )
+                .arg(
                     Arg::new("host")
                         .long("host")
                         .default_value("0.0.0.0")
@@ -483,10 +489,16 @@ async fn handle_serve_command(matches: &ArgMatches) -> Result<()> {
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(crate::constants::DEFAULT_HTTP_PORT);
 
+    // Get OAuth issuer (CLI overrides config)
+    let oauth_issuer = matches.get_one::<String>("oauth-issuer").cloned();
+
     // Update config with CLI values
     if let Some(http_config) = config.http.as_mut() {
         http_config.host = host.to_string();
         http_config.port = port;
+        if oauth_issuer.is_some() {
+            http_config.oauth_issuer = oauth_issuer;
+        }
     } else {
         config.http = Some(crate::config::HttpConfig {
             host: host.to_string(),
@@ -497,6 +509,7 @@ async fn handle_serve_command(matches: &ArgMatches) -> Result<()> {
             enable_http_api: true,
             enable_mcp: true,
             enable_oauth_server: false,
+            oauth_issuer,
         });
     }
 
