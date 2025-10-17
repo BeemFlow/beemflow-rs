@@ -30,9 +30,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux builds
+          # Linux builds (static with musl)
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             artifact_name: flow
             asset_name: flow-linux-amd64
 
@@ -45,12 +45,6 @@ jobs:
             target: aarch64-apple-darwin
             artifact_name: flow
             asset_name: flow-darwin-arm64
-
-          # Windows builds
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: flow.exe
-            asset_name: flow-windows-amd64.exe
 
     steps:
       - uses: actions/checkout@v5
@@ -67,17 +61,16 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools (Linux ARM64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y musl-tools
 
       - name: Build binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Strip binary (Unix)
-        if: runner.os != 'Windows'
+      - name: Strip binary
         run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
       - name: Upload artifact
