@@ -123,3 +123,13 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     created_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL
 );
+
+-- Performance indexes for runs queries
+-- Composite index for flow_name + status + started_at queries (optimizes list_runs_by_flow_and_status)
+CREATE INDEX IF NOT EXISTS idx_runs_flow_status_time ON runs(flow_name, status, started_at DESC);
+
+-- Index for steps by run_id (frequently queried for step outputs)
+CREATE INDEX IF NOT EXISTS idx_steps_run_id ON steps(run_id);
+
+-- Index for general time-based queries (list_runs with ORDER BY)
+CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at DESC);

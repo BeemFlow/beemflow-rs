@@ -582,8 +582,8 @@ async fn readiness_handler(
     State(storage): State<Arc<dyn crate::storage::Storage>>,
 ) -> std::result::Result<Json<Value>, (StatusCode, Json<Value>)> {
     // Check database connectivity by attempting a simple query
-    // We use list_runs() as a canary - if it succeeds, the database is accessible
-    match storage.list_runs().await {
+    // We use list_runs(1, 0) as a canary - if it succeeds, the database is accessible
+    match storage.list_runs(1, 0).await {
         Ok(_) => {
             // Database is accessible
             Ok(Json(json!({

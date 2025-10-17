@@ -565,6 +565,12 @@ impl Engine {
         flow_name: &str,
         current_run_id: Uuid,
     ) -> Option<HashMap<String, serde_json::Value>> {
+        tracing::debug!(
+            "Fetching previous run data for flow '{}', current run: {}",
+            flow_name,
+            current_run_id
+        );
+
         let runs_access = RunsAccess::new(
             self.storage.clone(),
             Some(current_run_id),
@@ -573,6 +579,11 @@ impl Engine {
 
         let prev_data = runs_access.previous().await;
         if !prev_data.is_empty() {
+            tracing::debug!(
+                "Found previous run data for '{}': {} fields",
+                flow_name,
+                prev_data.len()
+            );
             // Wrap in "previous" key for template access as runs.previous.id, etc.
             let mut wrapped = HashMap::new();
             wrapped.insert(
@@ -581,6 +592,7 @@ impl Engine {
             );
             Some(wrapped)
         } else {
+            tracing::debug!("No previous run data found for '{}'", flow_name);
             None
         }
     }

@@ -86,7 +86,10 @@ async fn test_all_storage_operations<S: Storage>(storage: Arc<S>) {
     let _ = resolved;
 
     // Test 5: ListRuns
-    let runs = storage.list_runs().await.expect("ListRuns should succeed");
+    let runs = storage
+        .list_runs(100, 0)
+        .await
+        .expect("ListRuns should succeed");
     assert_eq!(runs.len(), 1, "Expected 1 run");
 
     // Test 6: SavePausedRun, LoadPausedRuns, DeletePausedRun
@@ -125,7 +128,10 @@ async fn test_all_storage_operations<S: Storage>(storage: Arc<S>) {
         .await
         .expect("DeleteRun should succeed");
 
-    let runs = storage.list_runs().await.expect("ListRuns should succeed");
+    let runs = storage
+        .list_runs(100, 0)
+        .await
+        .expect("ListRuns should succeed");
     assert_eq!(runs.len(), 0, "Expected 0 runs after delete");
 }
 
@@ -406,7 +412,10 @@ async fn test_sqlite_storage_stress_runs() {
             .expect("SaveRun should succeed");
     }
 
-    let runs = storage.list_runs().await.expect("ListRuns should succeed");
+    let runs = storage
+        .list_runs(1000, 0)
+        .await
+        .expect("ListRuns should succeed");
     assert_eq!(runs.len(), 100, "Expected 100 runs");
 }
 
@@ -446,7 +455,10 @@ async fn test_sqlite_storage_concurrent_writes() {
             .expect("Concurrent write should succeed");
     }
 
-    let runs = storage.list_runs().await.expect("ListRuns should succeed");
+    let runs = storage
+        .list_runs(1000, 0)
+        .await
+        .expect("ListRuns should succeed");
     assert_eq!(runs.len(), 20, "Expected 20 runs from concurrent writes");
 }
 

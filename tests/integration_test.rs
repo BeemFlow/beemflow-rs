@@ -453,7 +453,7 @@ async fn test_cli_with_missing_parent_directory() {
         steps: None,
     };
     storage.save_run(&run).await.unwrap();
-    let runs = storage.list_runs().await.unwrap();
+    let runs = storage.list_runs(1000, 0).await.unwrap();
     assert_eq!(runs.len(), 1);
 }
 

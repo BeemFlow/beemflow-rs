@@ -102,7 +102,7 @@ async fn test_all_operations_comprehensive() {
     assert_eq!(paused_runs.len(), 0, "Expected 0 paused runs after delete");
 
     // Test ListRuns - should be empty initially
-    let runs = storage.list_runs().await.unwrap();
+    let runs = storage.list_runs(1000, 0).await.unwrap();
     assert_eq!(runs.len(), 0, "Expected 0 runs initially");
 
     // Add a run
@@ -171,12 +171,12 @@ async fn test_all_operations_comprehensive() {
     let _ = resolved_run;
 
     // Test ListRuns
-    let runs = storage.list_runs().await.unwrap();
+    let runs = storage.list_runs(1000, 0).await.unwrap();
     assert_eq!(runs.len(), 1, "Expected 1 run");
 
     // Test DeleteRun
     storage.delete_run(run_id).await.unwrap();
-    let runs = storage.list_runs().await.unwrap();
+    let runs = storage.list_runs(1000, 0).await.unwrap();
     assert_eq!(runs.len(), 0, "Expected 0 runs after delete");
 }
 
@@ -229,7 +229,7 @@ async fn test_list_runs_multiple() {
         storage.save_run(&run).await.unwrap();
     }
 
-    let runs = storage.list_runs().await.unwrap();
+    let runs = storage.list_runs(1000, 0).await.unwrap();
     assert_eq!(runs.len(), 5, "Expected 5 runs");
 }
 
@@ -459,7 +459,7 @@ async fn test_auto_create_parent_directories() {
     assert!(nested_path.exists(), "Database file should exist");
 
     // Verify it's functional - test with runs instead of flows
-    let runs = storage.list_runs().await.unwrap();
+    let runs = storage.list_runs(1000, 0).await.unwrap();
     assert_eq!(runs.len(), 0, "New database should have no runs");
 }
 
@@ -569,7 +569,7 @@ async fn test_concurrent_database_access() {
 
     // Verify all runs were saved
     let storage = SqliteStorage::new(&db_path_str).await.unwrap();
-    let runs = storage.list_runs().await.unwrap();
+    let runs = storage.list_runs(1000, 0).await.unwrap();
     assert_eq!(runs.len(), 5, "All concurrent writes should succeed");
 }
 
@@ -589,7 +589,7 @@ async fn test_memory_database_still_works() {
         steps: None,
     };
     storage.save_run(&run).await.unwrap();
-    let runs = storage.list_runs().await.unwrap();
+    let runs = storage.list_runs(1000, 0).await.unwrap();
     assert_eq!(runs.len(), 1);
 
     // Memory databases should not create any files

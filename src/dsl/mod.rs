@@ -129,3 +129,5 @@ pub fn render_template(template: &str, vars: HashMap<String, serde_json::Value>)
 
 #[cfg(test)]
 mod analyzer_test;
+#[cfg(test)]
+mod template_test;

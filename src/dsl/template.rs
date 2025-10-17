@@ -89,7 +89,7 @@ impl Templater {
 
         self.env
             .render_str(template, context)
-            .map_err(|e| TemplateError::Syntax(e.to_string()).into())
+            .map_err(|e| crate::BeemFlowError::from(TemplateError::Syntax(e.to_string())))
     }
 
     /// Evaluate a template expression and return the actual value (not rendered as string)

@@ -157,13 +157,66 @@ impl RunStorage for SqliteStorage {
         }
     }
 
-    async fn list_runs(&self) -> Result<Vec<Run>> {
+    async fn list_runs(&self, limit: usize, offset: usize) -> Result<Vec<Run>> {
+        // Cap limit at 10,000 to prevent unbounded queries
+        let capped_limit = limit.min(10_000);
+
         let rows = sqlx::query(
-            "SELECT id, flow_name, event, vars, status, started_at, ended_at 
-             FROM runs ORDER BY started_at DESC",
+            "SELECT id, flow_name, event, vars, status, started_at, ended_at
+             FROM runs
+             ORDER BY started_at DESC
+             LIMIT ? OFFSET ?",
         )
+        .bind(capped_limit as i64)
+        .bind(offset as i64)
         .fetch_all(&self.pool)
         .await?;
+
+        let mut runs = Vec::new();
+        for row in rows {
+            if let Ok(run) = Self::parse_run(&row) {
+                runs.push(run);
+            }
+        }
+        Ok(runs)
+    }
+
+    async fn list_runs_by_flow_and_status(
+        &self,
+        flow_name: &str,
+        status: RunStatus,
+        exclude_id: Option<Uuid>,
+        limit: usize,
+    ) -> Result<Vec<Run>> {
+        let status_str = run_status_to_str(status);
+
+        // Build query with optional exclude clause
+        let query = if let Some(id) = exclude_id {
+            sqlx::query(
+                "SELECT id, flow_name, event, vars, status, started_at, ended_at
+                 FROM runs
+                 WHERE flow_name = ? AND status = ? AND id != ?
+                 ORDER BY started_at DESC
+                 LIMIT ?",
+            )
+            .bind(flow_name)
+            .bind(status_str)
+            .bind(id.to_string())
+            .bind(limit as i64)
+        } else {
+            sqlx::query(
+                "SELECT id, flow_name, event, vars, status, started_at, ended_at
+                 FROM runs
+                 WHERE flow_name = ? AND status = ?
+                 ORDER BY started_at DESC
+                 LIMIT ?",
+            )
+            .bind(flow_name)
+            .bind(status_str)
+            .bind(limit as i64)
+        };
+
+        let rows = query.fetch_all(&self.pool).await?;
 
         let mut runs = Vec::new();
         for row in rows {

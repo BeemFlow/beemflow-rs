@@ -17,6 +17,15 @@ pub mod runs {
     pub struct EmptyInput {}
 
     #[derive(Deserialize, JsonSchema)]
+    #[schemars(description = "Input for listing runs with pagination")]
+    pub struct ListInput {
+        #[schemars(description = "Maximum number of runs to return (default: 100, max: 10000)")]
+        pub limit: Option<usize>,
+        #[schemars(description = "Number of runs to skip (default: 0)")]
+        pub offset: Option<usize>,
+    }
+
+    #[derive(Deserialize, JsonSchema)]
     #[schemars(description = "Input for starting a new flow run")]
     pub struct StartInput {
         #[schemars(description = "Name of the flow to execute")]
@@ -150,10 +159,10 @@ pub mod runs {
     /// List all runs
     #[operation(
         name = "list_runs",
-        input = EmptyInput,
+        input = ListInput,
         http = "GET /runs",
-        cli = "runs list",
-        description = "List all runs"
+        cli = "runs list [--limit <LIMIT>] [--offset <OFFSET>]",
+        description = "List all runs with pagination"
     )]
     pub struct List {
         pub deps: Arc<Dependencies>,
@@ -161,11 +170,15 @@ pub mod runs {
 
     #[async_trait]
     impl Operation for List {
-        type Input = EmptyInput;
+        type Input = ListInput;
         type Output = Value;
 
-        async fn execute(&self, _input: Self::Input) -> Result<Self::Output> {
-            let runs = self.deps.storage.list_runs().await?;
+        async fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+            // Use provided values or defaults (limit: 100, offset: 0)
+            let limit = input.limit.unwrap_or(100);
+            let offset = input.offset.unwrap_or(0);
+
+            let runs = self.deps.storage.list_runs(limit, offset).await?;
             Ok(serde_json::to_value(runs)?)
         }
     }

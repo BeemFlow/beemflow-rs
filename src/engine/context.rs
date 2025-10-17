@@ -209,7 +209,6 @@ pub fn is_valid_identifier(s: &str) -> bool {
         return false;
     }
 
-    // Check for valid Go-style identifier
     // Safe: We already checked that s is not empty above
     let first = s
         .chars()
@@ -257,63 +256,78 @@ impl RunsAccess {
     ///
     /// Returns empty map if no previous run found.
     pub async fn previous(&self) -> HashMap<String, Value> {
-        // Get all runs
-        let runs = match self.storage.list_runs().await {
+        // Use optimized query to fetch only matching runs (database-level filtering)
+        let runs = match self
+            .storage
+            .list_runs_by_flow_and_status(
+                &self.flow_name,
+                RunStatus::Succeeded,
+                self.current_run_id,
+                1, // Only need the most recent
+            )
+            .await
+        {
             Ok(runs) => runs,
-            Err(_) => return HashMap::new(),
+            Err(e) => {
+                tracing::warn!("Failed to query previous runs: {}", e);
+                return HashMap::new();
+            }
         };
 
-        // Find the most recent successful run from the same workflow
-        for run in runs {
-            // Only consider runs from the same workflow
-            if run.flow_name.as_str() != self.flow_name {
-                continue;
+        // Take the first (most recent) run if available
+        let run = match runs.first() {
+            Some(run) => run,
+            None => {
+                tracing::debug!(
+                    "No previous successful run found for flow '{}'",
+                    self.flow_name
+                );
+                return HashMap::new();
             }
+        };
 
-            // Skip the current run
-            if let Some(current_id) = self.current_run_id
-                && run.id == current_id
+        tracing::debug!(
+            "Found previous successful run: id={}, flow={}",
+            run.id,
+            run.flow_name
+        );
+
+        // Get step outputs for this run
+        let steps = match self.storage.get_steps(run.id).await {
+            Ok(steps) => steps,
+            Err(e) => {
+                tracing::warn!("Failed to get steps for run {}: {}", run.id, e);
+                return HashMap::new();
+            }
+        };
+
+        // Aggregate step outputs
+        let mut outputs = HashMap::new();
+        for step in steps {
+            if step.status == StepStatus::Succeeded
+                && let Some(ref step_outputs) = step.outputs
             {
-                continue;
+                outputs.insert(
+                    step.step_name.clone(),
+                    serde_json::to_value(step_outputs).unwrap_or(Value::Null),
+                );
             }
-
-            // Only return successful runs
-            if run.status != RunStatus::Succeeded {
-                continue;
-            }
-
-            // Get step outputs for this run
-            let steps = match self.storage.get_steps(run.id).await {
-                Ok(steps) => steps,
-                Err(_) => continue,
-            };
-
-            // Aggregate step outputs
-            let mut outputs = HashMap::new();
-            for step in steps {
-                if step.status == StepStatus::Succeeded
-                    && let Some(ref step_outputs) = step.outputs
-                {
-                    outputs.insert(
-                        step.step_name.clone(),
-                        serde_json::to_value(step_outputs).unwrap_or(Value::Null),
-                    );
-                }
-            }
-
-            // Return the first matching run (most recent due to ordering)
-            return serde_json::json!({
-                "id": run.id.to_string(),
-                "outputs": outputs,
-                "status": format!("{:?}", run.status),
-                "flow": run.flow_name,
-            })
-            .as_object()
-            .map(|obj| obj.clone().into_iter().collect())
-            .unwrap_or_default();
         }
 
-        // No previous run found
-        HashMap::new()
+        tracing::debug!(
+            "Returning previous run data with {} step outputs",
+            outputs.len()
+        );
+
+        // Return the run data
+        serde_json::json!({
+            "id": run.id.to_string(),
+            "outputs": outputs,
+            "status": format!("{:?}", run.status),
+            "flow": run.flow_name,
+        })
+        .as_object()
+        .map(|obj| obj.clone().into_iter().collect())
+        .unwrap_or_default()
     }
 }

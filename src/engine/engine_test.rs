@@ -329,7 +329,10 @@ async fn test_execute_catch_block() {
 
     // Verify catch block outputs are stored in the run
     let storage = engine.storage();
-    let runs = storage.list_runs().await.expect("Failed to list runs");
+    let runs = storage
+        .list_runs(1000, 0)
+        .await
+        .expect("Failed to list runs");
 
     // Find the catch_test run
     let catch_run = runs

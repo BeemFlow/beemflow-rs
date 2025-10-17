@@ -31,8 +31,24 @@ pub trait RunStorage: Send + Sync {
     /// Get a run by ID
     async fn get_run(&self, id: Uuid) -> Result<Option<Run>>;
 
-    /// List all runs
-    async fn list_runs(&self) -> Result<Vec<Run>>;
+    /// List runs with pagination
+    ///
+    /// Parameters:
+    /// - limit: Maximum number of runs to return (capped at 10,000)
+    /// - offset: Number of runs to skip
+    ///
+    /// Returns runs ordered by started_at DESC
+    async fn list_runs(&self, limit: usize, offset: usize) -> Result<Vec<Run>>;
+
+    /// List runs filtered by flow name and status, ordered by most recent first
+    /// This is optimized for finding previous successful runs without loading all data
+    async fn list_runs_by_flow_and_status(
+        &self,
+        flow_name: &str,
+        status: RunStatus,
+        exclude_id: Option<Uuid>,
+        limit: usize,
+    ) -> Result<Vec<Run>>;
 
     /// Delete a run and its steps
     async fn delete_run(&self, id: Uuid) -> Result<()>;

@@ -1,15 +1,13 @@
-
-use super::*;
 use crate::dsl::Templater;
-use std::collections::HashMap;
 use serde_json::json;
+use std::collections::HashMap;
 
 #[test]
 fn test_basic_template() {
     let templater = Templater::new();
     let mut data = HashMap::new();
     data.insert("name".to_string(), json!("BeemFlow"));
-    
+
     let result = templater.render("Hello, {{ name }}!", &data).unwrap();
     assert_eq!(result, "Hello, BeemFlow!");
 }
@@ -18,14 +16,19 @@ fn test_basic_template() {
 fn test_nested_path() {
     let templater = Templater::new();
     let mut data = HashMap::new();
-    data.insert("vars".to_string(), json!({
-        "user": {
-            "name": "Alice",
-            "age": 30
-        }
-    }));
-    
-    let result = templater.render("Name: {{ vars.user.name }}", &data).unwrap();
+    data.insert(
+        "vars".to_string(),
+        json!({
+            "user": {
+                "name": "Alice",
+                "age": 30
+            }
+        }),
+    );
+
+    let result = templater
+        .render("Name: {{ vars.user.name }}", &data)
+        .unwrap();
     assert_eq!(result, "Name: Alice");
 }
 
@@ -34,11 +37,11 @@ fn test_array_access() {
     let templater = Templater::new();
     let mut data = HashMap::new();
     data.insert("items".to_string(), json!(["first", "second", "third"]));
-    
+
     // minijinja uses bracket notation for array access
     let result = templater.render("{{ items[0] }}", &data).unwrap();
     assert_eq!(result, "first");
-    
+
     let result2 = templater.render("{{ items[2] }}", &data).unwrap();
     assert_eq!(result2, "third");
 }
@@ -48,7 +51,7 @@ fn test_evaluate_expression_simple() {
     let templater = Templater::new();
     let mut data = HashMap::new();
     data.insert("count".to_string(), json!(42));
-    
+
     let result = templater.evaluate_expression("{{ count }}", &data).unwrap();
     assert_eq!(result, json!(42));
 }
@@ -58,7 +61,7 @@ fn test_evaluate_expression_array() {
     let templater = Templater::new();
     let mut data = HashMap::new();
     data.insert("items".to_string(), json!(["a", "b", "c"]));
-    
+
     let result = templater.evaluate_expression("{{ items }}", &data).unwrap();
     assert_eq!(result, json!(["a", "b", "c"]));
 }
@@ -67,14 +70,19 @@ fn test_evaluate_expression_array() {
 fn test_evaluate_expression_nested() {
     let templater = Templater::new();
     let mut data = HashMap::new();
-    data.insert("data".to_string(), json!({
-        "rows": [
-            {"name": "Alice", "age": 30},
-            {"name": "Bob", "age": 25}
-        ]
-    }));
-    
-    let result = templater.evaluate_expression("{{ data.rows }}", &data).unwrap();
+    data.insert(
+        "data".to_string(),
+        json!({
+            "rows": [
+                {"name": "Alice", "age": 30},
+                {"name": "Bob", "age": 25}
+            ]
+        }),
+    );
+
+    let result = templater
+        .evaluate_expression("{{ data.rows }}", &data)
+        .unwrap();
     assert!(result.is_array());
     assert_eq!(result.as_array().unwrap().len(), 2);
 }
@@ -83,11 +91,16 @@ fn test_evaluate_expression_nested() {
 fn test_evaluate_expression_array_index() {
     let templater = Templater::new();
     let mut data = HashMap::new();
-    data.insert("data".to_string(), json!({
-        "rows": ["first", "second", "third"]
-    }));
-    
-    let result = templater.evaluate_expression("{{ data.rows[0] }}", &data).unwrap();
+    data.insert(
+        "data".to_string(),
+        json!({
+            "rows": ["first", "second", "third"]
+        }),
+    );
+
+    let result = templater
+        .evaluate_expression("{{ data.rows[0] }}", &data)
+        .unwrap();
     assert_eq!(result, json!("first"));
 }
 
@@ -131,22 +144,29 @@ fn test_join_filter() {
     let mut data = HashMap::new();
     data.insert("items".to_string(), json!(["a", "b", "c"]));
 
-    let result = templater.render("{{ items | join(\", \") }}", &data).unwrap();
+    let result = templater
+        .render("{{ items | join(\", \") }}", &data)
+        .unwrap();
     assert_eq!(result, "a, b, c");
 }
 
 #[test]
 fn test_default_filter() {
-    // Tests minijinja's built-in default filter
+    // Tests minijinja's built-in default filter (only applies to undefined variables, not empty strings)
     let templater = Templater::new();
     let mut data = HashMap::new();
-    data.insert("empty".to_string(), json!(""));
     data.insert("value".to_string(), json!("hello"));
 
-    let result1 = templater.render("{{ empty | default('fallback') }}", &data).unwrap();
+    // Test with undefined variable (not in data map)
+    let result1 = templater
+        .render("{{ undefined_var | default('fallback') }}", &data)
+        .unwrap();
     assert_eq!(result1, "fallback");
 
-    let result2 = templater.render("{{ value | default('fallback') }}", &data).unwrap();
+    // Test with defined variable
+    let result2 = templater
+        .render("{{ value | default('fallback') }}", &data)
+        .unwrap();
     assert_eq!(result2, "hello");
 }
 
@@ -158,10 +178,14 @@ fn test_default_with_or_operator() {
     data.insert("empty".to_string(), json!(null));
     data.insert("value".to_string(), json!("hello"));
 
-    let result1 = templater.render("{{ empty or 'fallback' }}", &data).unwrap();
+    let result1 = templater
+        .render("{{ empty or 'fallback' }}", &data)
+        .unwrap();
     assert_eq!(result1, "fallback");
 
-    let result2 = templater.render("{{ value or 'fallback' }}", &data).unwrap();
+    let result2 = templater
+        .render("{{ value or 'fallback' }}", &data)
+        .unwrap();
     assert_eq!(result2, "hello");
 }
 
@@ -173,16 +197,14 @@ fn test_conditionals() {
     data.insert("status".to_string(), json!("active"));
     data.insert("count".to_string(), json!(10));
 
-    let result1 = templater.render(
-        "{% if status == 'active' %}Active{% endif %}",
-        &data
-    ).unwrap();
+    let result1 = templater
+        .render("{% if status == 'active' %}Active{% endif %}", &data)
+        .unwrap();
     assert_eq!(result1, "Active");
 
-    let result2 = templater.render(
-        "{% if count > 5 %}Many{% else %}Few{% endif %}",
-        &data
-    ).unwrap();
+    let result2 = templater
+        .render("{% if count > 5 %}Many{% else %}Few{% endif %}", &data)
+        .unwrap();
     assert_eq!(result2, "Many");
 }
 
@@ -193,10 +215,12 @@ fn test_for_loop() {
     let mut data = HashMap::new();
     data.insert("items".to_string(), json!(["a", "b", "c"]));
 
-    let result = templater.render(
-        "{% for item in items %}{{ item }}{% if not loop.last %}, {% endif %}{% endfor %}",
-        &data
-    ).unwrap();
+    let result = templater
+        .render(
+            "{% for item in items %}{{ item }}{% if not loop.last %}, {% endif %}{% endfor %}",
+            &data,
+        )
+        .unwrap();
     assert_eq!(result, "a, b, c");
 }
 
@@ -207,18 +231,23 @@ fn test_scoped_access() {
     data.insert("vars".to_string(), json!({"name": "BeemFlow"}));
     data.insert("env".to_string(), json!({"USER": "alice"}));
     data.insert("secrets".to_string(), json!({"API_KEY": "secret123"}));
-    data.insert("outputs".to_string(), json!({"step1": {"result": "success"}}));
-    
+    data.insert(
+        "outputs".to_string(),
+        json!({"step1": {"result": "success"}}),
+    );
+
     let result1 = templater.render("{{ vars.name }}", &data).unwrap();
     assert_eq!(result1, "BeemFlow");
-    
+
     let result2 = templater.render("{{ env.USER }}", &data).unwrap();
     assert_eq!(result2, "alice");
-    
+
     let result3 = templater.render("{{ secrets.API_KEY }}", &data).unwrap();
     assert_eq!(result3, "secret123");
-    
-    let result4 = templater.render("{{ outputs.step1.result }}", &data).unwrap();
+
+    let result4 = templater
+        .render("{{ outputs.step1.result }}", &data)
+        .unwrap();
     assert_eq!(result4, "success");
 }
 
@@ -226,15 +255,20 @@ fn test_scoped_access() {
 fn test_complex_nested_access() {
     let templater = Templater::new();
     let mut data = HashMap::new();
-    data.insert("data".to_string(), json!({
-        "rows": [
-            {"name": "Alice", "emails": ["alice@example.com", "alice@work.com"]},
-            {"name": "Bob", "emails": ["bob@example.com"]}
-        ]
-    }));
-    
+    data.insert(
+        "data".to_string(),
+        json!({
+            "rows": [
+                {"name": "Alice", "emails": ["alice@example.com", "alice@work.com"]},
+                {"name": "Bob", "emails": ["bob@example.com"]}
+            ]
+        }),
+    );
+
     // Access nested array within array - use bracket notation
-    let result = templater.render("{{ data.rows[0].emails[0] }}", &data).unwrap();
+    let result = templater
+        .render("{{ data.rows[0].emails[0] }}", &data)
+        .unwrap();
     assert_eq!(result, "alice@example.com");
 }
 
@@ -264,22 +298,19 @@ fn test_comparison_operators() {
     data.insert("a".to_string(), json!(5));
     data.insert("b".to_string(), json!(10));
 
-    let result1 = templater.render(
-        "{% if a < b %}Less{% endif %}",
-        &data
-    ).unwrap();
+    let result1 = templater
+        .render("{% if a < b %}Less{% endif %}", &data)
+        .unwrap();
     assert_eq!(result1, "Less");
 
-    let result2 = templater.render(
-        "{% if b > a %}Greater{% endif %}",
-        &data
-    ).unwrap();
+    let result2 = templater
+        .render("{% if b > a %}Greater{% endif %}", &data)
+        .unwrap();
     assert_eq!(result2, "Greater");
 
-    let result3 = templater.render(
-        "{% if a == 5 %}Equal{% endif %}",
-        &data
-    ).unwrap();
+    let result3 = templater
+        .render("{% if a == 5 %}Equal{% endif %}", &data)
+        .unwrap();
     assert_eq!(result3, "Equal");
 }
 
@@ -291,22 +322,25 @@ fn test_logical_operators() {
     data.insert("status".to_string(), json!("active"));
     data.insert("count".to_string(), json!(10));
 
-    let result1 = templater.render(
-        "{% if status == 'active' and count > 5 %}Both{% endif %}",
-        &data
-    ).unwrap();
+    let result1 = templater
+        .render(
+            "{% if status == 'active' and count > 5 %}Both{% endif %}",
+            &data,
+        )
+        .unwrap();
     assert_eq!(result1, "Both");
 
-    let result2 = templater.render(
-        "{% if status == 'inactive' or count > 5 %}Either{% endif %}",
-        &data
-    ).unwrap();
+    let result2 = templater
+        .render(
+            "{% if status == 'inactive' or count > 5 %}Either{% endif %}",
+            &data,
+        )
+        .unwrap();
     assert_eq!(result2, "Either");
 
-    let result3 = templater.render(
-        "{% if not (status == 'inactive') %}Not{% endif %}",
-        &data
-    ).unwrap();
+    let result3 = templater
+        .render("{% if not (status == 'inactive') %}Not{% endif %}", &data)
+        .unwrap();
     assert_eq!(result3, "Not");
 }
 
@@ -318,10 +352,14 @@ fn test_default_operator_with_or() {
     data.insert("empty".to_string(), json!(null));
     data.insert("value".to_string(), json!("hello"));
 
-    let result1 = templater.render("{{ empty or 'fallback' }}", &data).unwrap();
+    let result1 = templater
+        .render("{{ empty or 'fallback' }}", &data)
+        .unwrap();
     assert_eq!(result1, "fallback");
 
-    let result2 = templater.render("{{ value or 'fallback' }}", &data).unwrap();
+    let result2 = templater
+        .render("{{ value or 'fallback' }}", &data)
+        .unwrap();
     assert_eq!(result2, "hello");
 }
 
@@ -331,9 +369,12 @@ fn test_array_access_brackets() {
     let templater = Templater::new();
     let mut data = HashMap::new();
     data.insert("items".to_string(), json!(["first", "second", "third"]));
-    data.insert("data".to_string(), json!({
-        "rows": ["a", "b", "c"]
-    }));
+    data.insert(
+        "data".to_string(),
+        json!({
+            "rows": ["a", "b", "c"]
+        }),
+    );
 
     let result1 = templater.render("{{ items[0] }}", &data).unwrap();
     assert_eq!(result1, "first");
@@ -353,10 +394,59 @@ fn test_complex_expression() {
     data.insert("default_val".to_string(), json!(null));
 
     // Test complex expression with or operator and array access
-    let result = templater.render("{{ values[0] or 'none' }}", &data).unwrap();
+    let result = templater
+        .render("{{ values[0] or 'none' }}", &data)
+        .unwrap();
     assert_eq!(result, "10");
 
-    let result2 = templater.render("{{ default_val or values[1] }}", &data).unwrap();
+    let result2 = templater
+        .render("{{ default_val or values[1] }}", &data)
+        .unwrap();
     assert_eq!(result2, "20");
 }
+
+#[test]
+fn test_runs_previous_structure() {
+    // Test the exact structure used by runs.previous
+    let templater = Templater::new();
+    let mut data = HashMap::new();
+
+    // This matches the structure from fetch_previous_run_data
+    data.insert(
+        "runs".to_string(),
+        json!({
+            "previous": {
+                "id": "test-uuid-123",
+                "flow": "memory_demo",
+                "outputs": {
+                    "generate_message": {
+                        "text": "The time is alec's time"
+                    },
+                    "recall_previous": {
+                        "text": "This is a test"
+                    }
+                },
+                "status": "Succeeded"
+            }
+        }),
+    );
+
+    // Test accessing runs.previous.id (this is what the template uses)
+    let result1 = templater
+        .render(
+            "{% if runs.previous.id %}Found{% else %}Not found{% endif %}",
+            &data,
+        )
+        .unwrap();
+    assert_eq!(result1, "Found", "runs.previous.id should be truthy");
+
+    // Test accessing the actual value
+    let result2 = templater.render("{{ runs.previous.id }}", &data).unwrap();
+    assert_eq!(result2, "test-uuid-123");
+
+    // Test accessing nested outputs
+    let result3 = templater
+        .render("{{ runs.previous.outputs.generate_message.text }}", &data)
+        .unwrap();
+    assert_eq!(result3, "The time is alec's time");
 }
