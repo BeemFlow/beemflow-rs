@@ -606,17 +606,19 @@ impl OAuthStorage for PostgresStorage {
     // OAuth provider methods
     async fn save_oauth_provider(&self, provider: &OAuthProvider) -> Result<()> {
         let scopes_json = serde_json::to_value(&provider.scopes)?;
+        let auth_params_json = serde_json::to_value(&provider.auth_params)?;
 
         sqlx::query(
             "INSERT INTO oauth_providers
-             (id, client_id, client_secret, auth_url, token_url, scopes, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             (id, client_id, client_secret, auth_url, token_url, scopes, auth_params, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              ON CONFLICT(id) DO UPDATE SET
                 client_id = EXCLUDED.client_id,
                 client_secret = EXCLUDED.client_secret,
                 auth_url = EXCLUDED.auth_url,
                 token_url = EXCLUDED.token_url,
                 scopes = EXCLUDED.scopes,
+                auth_params = EXCLUDED.auth_params,
                 updated_at = EXCLUDED.updated_at",
         )
         .bind(&provider.id)
@@ -625,6 +627,7 @@ impl OAuthStorage for PostgresStorage {
         .bind(&provider.auth_url)
         .bind(&provider.token_url)
         .bind(scopes_json)
+        .bind(auth_params_json)
         .bind(provider.created_at)
         .bind(Utc::now())
         .execute(&self.pool)
@@ -635,7 +638,7 @@ impl OAuthStorage for PostgresStorage {
 
     async fn get_oauth_provider(&self, id: &str) -> Result<Option<OAuthProvider>> {
         let row = sqlx::query(
-            "SELECT id, client_id, client_secret, auth_url, token_url, scopes, created_at, updated_at
+            "SELECT id, client_id, client_secret, auth_url, token_url, scopes, auth_params, created_at, updated_at
              FROM oauth_providers
              WHERE id = $1"
         )
@@ -646,6 +649,7 @@ impl OAuthStorage for PostgresStorage {
         match row {
             Some(row) => {
                 let scopes_json: serde_json::Value = row.try_get("scopes")?;
+                let auth_params_json: serde_json::Value = row.try_get("auth_params")?;
                 Ok(Some(OAuthProvider {
                     id: row.try_get::<String, _>("id")?,
                     name: row.try_get::<String, _>("id")?, // DB schema has no name column, duplicate id
@@ -654,6 +658,7 @@ impl OAuthStorage for PostgresStorage {
                     auth_url: row.try_get("auth_url")?,
                     token_url: row.try_get("token_url")?,
                     scopes: serde_json::from_value(scopes_json).ok(),
+                    auth_params: serde_json::from_value(auth_params_json).ok(),
                     created_at: row.try_get("created_at")?,
                     updated_at: row.try_get("updated_at")?,
                 }))
@@ -664,7 +669,7 @@ impl OAuthStorage for PostgresStorage {
 
     async fn list_oauth_providers(&self) -> Result<Vec<OAuthProvider>> {
         let rows = sqlx::query(
-            "SELECT id, client_id, client_secret, auth_url, token_url, scopes, created_at, updated_at
+            "SELECT id, client_id, client_secret, auth_url, token_url, scopes, auth_params, created_at, updated_at
              FROM oauth_providers
              ORDER BY created_at DESC"
         )
@@ -674,6 +679,7 @@ impl OAuthStorage for PostgresStorage {
         let mut providers = Vec::new();
         for row in rows {
             let scopes_json: serde_json::Value = row.try_get("scopes")?;
+            let auth_params_json: serde_json::Value = row.try_get("auth_params")?;
             providers.push(OAuthProvider {
                 id: row.try_get::<String, _>("id")?,
                 name: row.try_get::<String, _>("id")?, // DB schema has no name column, duplicate id
@@ -682,6 +688,7 @@ impl OAuthStorage for PostgresStorage {
                 auth_url: row.try_get("auth_url")?,
                 token_url: row.try_get("token_url")?,
                 scopes: serde_json::from_value(scopes_json).ok(),
+                auth_params: serde_json::from_value(auth_params_json).ok(),
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
             });

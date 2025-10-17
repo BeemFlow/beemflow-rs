@@ -686,6 +686,11 @@ pub struct OAuthProvider {
     /// Supported scopes
     pub scopes: Option<Vec<String>>,
 
+    /// OAuth authorization parameters
+    /// Additional query parameters to append to the authorization URL
+    /// Example: {"prompt": "select_account", "access_type": "offline"}
+    pub auth_params: Option<HashMap<String, String>>,
+
     /// Creation time
     pub created_at: DateTime<Utc>,
 

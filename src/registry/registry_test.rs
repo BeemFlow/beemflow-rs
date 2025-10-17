@@ -27,6 +27,7 @@ fn test_registry_operations() {
         auth_url: None,
         token_url: None,
         scopes: None,
+        auth_params: None,
         webhook: None,
     };
 

@@ -125,6 +125,12 @@ fn build_cli(registry: &OperationRegistry) -> Command {
                         .help("OAuth issuer URL (e.g., https://your-domain.com). Required for ChatGPT/external clients. Defaults to http://host:port"),
                 )
                 .arg(
+                    Arg::new("public-url")
+                        .long("public-url")
+                        .value_name("URL")
+                        .help("Public-facing URL for this BeemFlow instance (e.g., https://your-domain.com). Used for OAuth callbacks, webhooks, and any external integrations. Defaults to http://host:port (or http://localhost:port if host is 0.0.0.0)"),
+                )
+                .arg(
                     Arg::new("host")
                         .long("host")
                         .default_value("0.0.0.0")
@@ -472,12 +478,18 @@ async fn handle_serve_command(matches: &ArgMatches) -> Result<()> {
     // Get OAuth issuer (CLI overrides config)
     let oauth_issuer = matches.get_one::<String>("oauth-issuer").cloned();
 
+    // Get public URL (CLI overrides config)
+    let public_url = matches.get_one::<String>("public-url").cloned();
+
     // Update config with CLI values
     if let Some(http_config) = config.http.as_mut() {
         http_config.host = host.to_string();
         http_config.port = port;
-        if oauth_issuer.is_some() {
-            http_config.oauth_issuer = oauth_issuer;
+        if let Some(issuer) = oauth_issuer {
+            http_config.oauth_issuer = Some(issuer);
+        }
+        if let Some(url) = public_url {
+            http_config.public_url = Some(url);
         }
     } else {
         config.http = Some(crate::config::HttpConfig {
@@ -490,6 +502,7 @@ async fn handle_serve_command(matches: &ArgMatches) -> Result<()> {
             enable_mcp: true,
             enable_oauth_server: false,
             oauth_issuer,
+            public_url,
         });
     }
 

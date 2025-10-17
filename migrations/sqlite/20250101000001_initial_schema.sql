@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS oauth_providers (
     auth_url TEXT NOT NULL,
     token_url TEXT NOT NULL,
     scopes TEXT,
+    auth_params TEXT,
     created_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL
 );

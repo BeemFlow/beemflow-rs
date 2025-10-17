@@ -215,7 +215,7 @@
     "endpoint": "https://www.googleapis.com/drive/v3/files",
     "method": "GET",
     "headers": {
-      "Authorization": "$oauth:google:sheets_default",
+      "Authorization": "$oauth:google:default",
       "Content-Type": "application/json"
     }
   },
@@ -267,7 +267,7 @@
     "endpoint": "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/{range}",
     "method": "GET",
     "headers": {
-      "Authorization": "$oauth:google:sheets_default",
+      "Authorization": "$oauth:google:default",
       "Content-Type": "application/json"
     }
   },
@@ -311,7 +311,7 @@
     "endpoint": "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/{range}?valueInputOption=USER_ENTERED",
     "method": "PUT",
     "headers": {
-      "Authorization": "$oauth:google:sheets_default",
+      "Authorization": "$oauth:google:default",
       "Content-Type": "application/json"
     }
   },
@@ -352,7 +352,7 @@
     "endpoint": "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/{range}:append?valueInputOption=USER_ENTERED",
     "method": "POST",
     "headers": {
-      "Authorization": "$oauth:google:sheets_default",
+      "Authorization": "$oauth:google:default",
       "Content-Type": "application/json"
     }
   },
@@ -440,7 +440,7 @@
     "endpoint": "https://sheets.googleapis.com/v4/spreadsheets",
     "method": "POST",
     "headers": {
-      "Authorization": "$oauth:google:sheets_default",
+      "Authorization": "$oauth:google:default",
       "Content-Type": "application/json"
     }
   },
@@ -470,6 +470,10 @@
       "https://www.googleapis.com/auth/userinfo.profile",
       "https://www.googleapis.com/auth/userinfo.email"
     ],
+    "auth_params": {
+      "prompt": "select_account",
+      "access_type": "offline"
+    },
     "scope_descriptions": {
       "https://www.googleapis.com/auth/spreadsheets": "Read and write Google Sheets spreadsheets",
       "https://www.googleapis.com/auth/drive": "Full access to Google Drive files and folders",

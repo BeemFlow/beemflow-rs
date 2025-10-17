@@ -113,6 +113,12 @@ pub struct RegistryEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<String>>,
 
+    /// OAuth authorization parameters (for oauth_provider)
+    /// Additional query parameters to append to the authorization URL
+    /// Example: {"prompt": "select_account", "access_type": "offline"}
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_params: Option<HashMap<String, String>>,
+
     /// Webhook configuration (for oauth_provider)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub webhook: Option<WebhookConfig>,

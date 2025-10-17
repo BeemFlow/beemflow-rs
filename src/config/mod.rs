@@ -254,6 +254,12 @@ pub struct HttpConfig {
     /// If not set, defaults to http://host:port
     #[serde(skip_serializing_if = "Option::is_none", rename = "oauthIssuer")]
     pub oauth_issuer: Option<String>,
+
+    /// Public-facing URL for this BeemFlow instance (e.g., https://your-domain.com)
+    /// Used for OAuth callbacks, webhooks, and any external integrations that need to call back.
+    /// If not set, defaults to http://host:port (or http://localhost:port if host is 0.0.0.0)
+    #[serde(skip_serializing_if = "Option::is_none", rename = "publicUrl")]
+    pub public_url: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -708,6 +714,7 @@ impl Default for Config {
                 enable_mcp: true,
                 enable_oauth_server: false,
                 oauth_issuer: None, // Auto-generated from host:port if not set
+                public_url: None,   // Auto-detected or explicitly configured
             }),
             log: Some(LogConfig {
                 level: Some("info".to_string()),

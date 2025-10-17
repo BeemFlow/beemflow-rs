@@ -672,12 +672,13 @@ impl OAuthStorage for SqliteStorage {
     // OAuth provider methods
     async fn save_oauth_provider(&self, provider: &OAuthProvider) -> Result<()> {
         let scopes_json = serde_json::to_string(&provider.scopes)?;
+        let auth_params_json = serde_json::to_string(&provider.auth_params)?;
         let now = Utc::now().timestamp();
 
         sqlx::query(
             "INSERT OR REPLACE INTO oauth_providers
-             (id, client_id, client_secret, auth_url, token_url, scopes, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+             (id, client_id, client_secret, auth_url, token_url, scopes, auth_params, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&provider.id)
         .bind(&provider.client_id)
@@ -685,6 +686,7 @@ impl OAuthStorage for SqliteStorage {
         .bind(&provider.auth_url)
         .bind(&provider.token_url)
         .bind(scopes_json)
+        .bind(auth_params_json)
         .bind(provider.created_at.timestamp())
         .bind(now)
         .execute(&self.pool)
@@ -695,7 +697,7 @@ impl OAuthStorage for SqliteStorage {
 
     async fn get_oauth_provider(&self, id: &str) -> Result<Option<OAuthProvider>> {
         let row = sqlx::query(
-            "SELECT id, client_id, client_secret, auth_url, token_url, scopes, created_at, updated_at
+            "SELECT id, client_id, client_secret, auth_url, token_url, scopes, auth_params, created_at, updated_at
              FROM oauth_providers
              WHERE id = ?"
         )
@@ -706,6 +708,7 @@ impl OAuthStorage for SqliteStorage {
         match row {
             Some(row) => {
                 let scopes_json: String = row.try_get("scopes")?;
+                let auth_params_json: String = row.try_get("auth_params")?;
                 let created_at_unix: i64 = row.try_get("created_at")?;
                 let updated_at_unix: i64 = row.try_get("updated_at")?;
 
@@ -717,6 +720,7 @@ impl OAuthStorage for SqliteStorage {
                     auth_url: row.try_get("auth_url")?,
                     token_url: row.try_get("token_url")?,
                     scopes: serde_json::from_str(&scopes_json).ok(),
+                    auth_params: serde_json::from_str(&auth_params_json).ok(),
                     created_at: DateTime::from_timestamp(created_at_unix, 0)
                         .unwrap_or_else(Utc::now),
                     updated_at: DateTime::from_timestamp(updated_at_unix, 0)
@@ -729,7 +733,7 @@ impl OAuthStorage for SqliteStorage {
 
     async fn list_oauth_providers(&self) -> Result<Vec<OAuthProvider>> {
         let rows = sqlx::query(
-            "SELECT id, client_id, client_secret, auth_url, token_url, scopes, created_at, updated_at
+            "SELECT id, client_id, client_secret, auth_url, token_url, scopes, auth_params, created_at, updated_at
              FROM oauth_providers
              ORDER BY created_at DESC"
         )
@@ -739,6 +743,7 @@ impl OAuthStorage for SqliteStorage {
         let mut providers = Vec::new();
         for row in rows {
             let scopes_json: String = row.try_get("scopes")?;
+            let auth_params_json: String = row.try_get("auth_params")?;
             let created_at_unix: i64 = row.try_get("created_at")?;
             let updated_at_unix: i64 = row.try_get("updated_at")?;
 
@@ -750,6 +755,7 @@ impl OAuthStorage for SqliteStorage {
                 auth_url: row.try_get("auth_url")?,
                 token_url: row.try_get("token_url")?,
                 scopes: serde_json::from_str(&scopes_json).ok(),
+                auth_params: serde_json::from_str(&auth_params_json).ok(),
                 created_at: DateTime::from_timestamp(created_at_unix, 0).unwrap_or_else(Utc::now),
                 updated_at: DateTime::from_timestamp(updated_at_unix, 0).unwrap_or_else(Utc::now),
             });

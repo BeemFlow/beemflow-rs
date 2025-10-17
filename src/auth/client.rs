@@ -5,7 +5,7 @@
 
 use crate::http::session::SessionStore;
 use crate::http::template::TemplateRenderer;
-use crate::model::OAuthCredential;
+use crate::model::{OAuthCredential, OAuthProvider};
 use crate::registry::RegistryManager;
 use crate::storage::Storage;
 use crate::{BeemFlowError, Result};
@@ -23,18 +23,9 @@ use oauth2::{
     basic::BasicClient,
 };
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
-
-/// OAuth provider configuration
-#[derive(Debug, Clone)]
-struct ProviderConfig {
-    client_id: String,
-    client_secret: String,
-    auth_url: String,
-    token_url: String,
-}
 
 /// OAuth client manager for handling tokens from external providers
 ///
@@ -78,14 +69,18 @@ impl OAuthClientManager {
     ///
     /// First checks the registry (where default providers like Google, GitHub are defined),
     /// then falls back to storage for custom user-created providers.
-    async fn get_provider(&self, provider_id: &str) -> Result<ProviderConfig> {
+    async fn get_provider(&self, provider_id: &str) -> Result<OAuthProvider> {
         // Try registry first (default providers with $env: variables expanded)
         if let Some(entry) = self
             .registry_manager
             .get_oauth_provider(provider_id)
             .await?
         {
-            return Ok(ProviderConfig {
+            // Convert RegistryEntry to OAuthProvider
+            // Note: id, created_at, updated_at are dummy values for registry providers
+            return Ok(OAuthProvider {
+                id: entry.name.clone(),
+                name: entry.display_name.unwrap_or(entry.name),
                 client_id: entry.client_id.ok_or_else(|| {
                     BeemFlowError::auth(format!(
                         "OAuth provider '{}' missing client_id",
@@ -110,12 +105,15 @@ impl OAuthClientManager {
                         provider_id
                     ))
                 })?,
+                scopes: entry.scopes,
+                auth_params: entry.auth_params,
+                created_at: Utc::now(), // Dummy timestamp for registry providers
+                updated_at: Utc::now(), // Dummy timestamp for registry providers
             });
         }
 
         // Fall back to storage for custom providers
-        let provider = self
-            .storage
+        self.storage
             .get_oauth_provider(provider_id)
             .await?
             .ok_or_else(|| {
@@ -123,14 +121,7 @@ impl OAuthClientManager {
                     "OAuth provider '{}' not found in registry or storage",
                     provider_id
                 ))
-            })?;
-
-        Ok(ProviderConfig {
-            client_id: provider.client_id,
-            client_secret: provider.client_secret,
-            auth_url: provider.auth_url,
-            token_url: provider.token_url,
-        })
+            })
     }
 
     /// Build authorization URL for a provider using oauth2 crate
@@ -176,7 +167,7 @@ impl OAuthClientManager {
 
         // Build authorization URL with PKCE
         // Use custom state if provided, otherwise generate random CSRF token
-        let auth_url = if let Some(custom) = custom_state {
+        let mut auth_url = if let Some(custom) = custom_state {
             // Use custom state (e.g., "{csrf_token}:{session_id}")
             // The oauth2 crate's CsrfToken is just a wrapper around a string
             let (url, _) = client
@@ -194,6 +185,18 @@ impl OAuthClientManager {
                 .url();
             url
         };
+
+        // Append any additional auth parameters from the provider configuration
+        // This allows providers to specify arbitrary query params in the registry
+        // Example: Google uses {"prompt": "select_account"} to force account selection
+        if let Some(ref params) = config.auth_params
+            && !params.is_empty()
+        {
+            let mut query_pairs = auth_url.query_pairs_mut();
+            for (key, value) in params {
+                query_pairs.append_pair(key, value);
+            }
+        }
 
         Ok((auth_url.to_string(), pkce_verifier.secret().clone()))
     }
@@ -553,6 +556,15 @@ async fn oauth_providers_handler(State(state): State<Arc<OAuthClientState>>) -> 
         }
     };
 
+    // Fetch all credentials and build a set of connected provider IDs for O(1) lookup
+    let connected_providers: HashSet<String> = match state.storage.list_oauth_credentials().await {
+        Ok(credentials) => credentials.iter().map(|c| c.provider.clone()).collect(),
+        Err(e) => {
+            tracing::error!("Failed to list OAuth credentials: {}", e);
+            HashSet::new()
+        }
+    };
+
     // Build provider data for template from registry providers
     let mut provider_data: Vec<Value> = registry_providers
         .iter()
@@ -568,11 +580,15 @@ async fn oauth_providers_handler(State(state): State<Arc<OAuthClientState>>) -> 
                 .map(|s| s.join(", "))
                 .unwrap_or_else(|| "None".to_string());
 
+            // Check if provider has any credentials stored (O(1) lookup)
+            let connected = connected_providers.contains(&entry.name);
+
             json!({
                 "id": entry.name,
                 "name": name,
                 "icon": icon,
                 "scopes_str": scopes_str,
+                "connected": connected,
             })
         })
         .collect();
@@ -589,11 +605,15 @@ async fn oauth_providers_handler(State(state): State<Arc<OAuthClientState>>) -> 
             .map(|s| s.join(", "))
             .unwrap_or_else(|| "None".to_string());
 
+        // Check if provider has any credentials stored (O(1) lookup)
+        let connected = connected_providers.contains(&p.id);
+
         provider_data.push(json!({
             "id": p.id,
             "name": p.name,
             "icon": icon,
             "scopes_str": scopes_str,
+            "connected": connected,
         }));
     }
 

@@ -121,7 +121,12 @@
                 <strong>ID:</strong> {{ provider.id }}<br>
                 <strong>Scopes:</strong> {{ provider.scopes_str }}
             </div>
+            {% if provider.connected %}
+            <span class="status-badge status-connected">✓ Connected</span>
+            <a href="/oauth/providers/{{ provider.id }}" class="btn" style="margin-top: 8px;">Reconnect</a>
+            {% else %}
             <a href="/oauth/providers/{{ provider.id }}" class="btn">Connect</a>
+            {% endif %}
         </div>
         {% endfor %}
         {% endif %}
