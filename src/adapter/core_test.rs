@@ -8,11 +8,15 @@ use std::sync::Arc;
 
 // Helper to create test execution context
 async fn test_context() -> ExecutionContext {
-    ExecutionContext::new(Arc::new(
+    let storage = Arc::new(
         SqliteStorage::new(":memory:")
             .await
             .expect("Failed to create in-memory SQLite storage"),
-    ))
+    );
+    let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
+        Arc::new(crate::secrets::EnvSecretsProvider::new());
+
+    ExecutionContext::new(storage, secrets_provider)
 }
 
 // ========================================

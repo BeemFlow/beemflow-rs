@@ -285,11 +285,13 @@ impl OAuthClientManager {
     /// use beemflow::auth::OAuthClientManager;
     /// use beemflow::storage::SqliteStorage;
     /// use beemflow::registry::RegistryManager;
+    /// use beemflow::secrets::EnvSecretsProvider;
     /// use std::sync::Arc;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let storage = Arc::new(SqliteStorage::new(":memory:").await?);
-    /// let registry_manager = Arc::new(RegistryManager::standard(None));
+    /// let secrets_provider = Arc::new(EnvSecretsProvider::new());
+    /// let registry_manager = Arc::new(RegistryManager::standard(None, secrets_provider));
     /// let client = OAuthClientManager::new(
     ///     storage,
     ///     registry_manager,

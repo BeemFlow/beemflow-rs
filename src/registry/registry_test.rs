@@ -99,7 +99,11 @@ async fn test_registry_manager_priority() {
     let local = LocalRegistry::new(temp_file.path().to_str().unwrap());
     let default = DefaultRegistry::new();
 
-    let manager = RegistryManager::new(vec![Box::new(local), Box::new(default)]);
+    // Create secrets provider for test
+    let secrets_provider: std::sync::Arc<dyn crate::secrets::SecretsProvider> =
+        std::sync::Arc::new(crate::secrets::EnvSecretsProvider::new());
+
+    let manager = RegistryManager::new(vec![Box::new(local), Box::new(default)], secrets_provider);
 
     // Get the entry - should use local override
     let entry = manager.get_server("openai.chat_completion").await.unwrap();
@@ -114,7 +118,11 @@ async fn test_registry_manager_fallback() {
     let local = LocalRegistry::new("/nonexistent/path");
     let default = DefaultRegistry::new();
 
-    let manager = RegistryManager::new(vec![Box::new(local), Box::new(default)]);
+    // Create secrets provider for test
+    let secrets_provider: std::sync::Arc<dyn crate::secrets::SecretsProvider> =
+        std::sync::Arc::new(crate::secrets::EnvSecretsProvider::new());
+
+    let manager = RegistryManager::new(vec![Box::new(local), Box::new(default)], secrets_provider);
 
     // Should fall back to default even if local fails
     let entries = manager.list_all_servers().await.unwrap();

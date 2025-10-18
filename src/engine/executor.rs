@@ -130,6 +130,7 @@ pub struct Executor {
     templater: Arc<Templater>,
     event_bus: Arc<dyn EventBus>,
     storage: Arc<dyn Storage>,
+    secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
     runs_data: Option<HashMap<String, Value>>,
     max_concurrent_tasks: usize,
 }
@@ -141,6 +142,7 @@ impl Executor {
         templater: Arc<Templater>,
         event_bus: Arc<dyn EventBus>,
         storage: Arc<dyn Storage>,
+        secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
         runs_data: Option<HashMap<String, Value>>,
         max_concurrent_tasks: usize,
     ) -> Self {
@@ -149,6 +151,7 @@ impl Executor {
             templater,
             event_bus,
             storage,
+            secrets_provider,
             runs_data,
             max_concurrent_tasks,
         }
@@ -294,6 +297,7 @@ impl Executor {
             let templater = self.templater.clone();
             let runs_data = self.runs_data.clone();
             let storage = self.storage.clone();
+            let secrets_provider = self.secrets_provider.clone();
             let permit = semaphore.clone().acquire_owned().await.map_err(|e| {
                 BeemFlowError::adapter(format!("Failed to acquire semaphore: {}", e))
             })?;
@@ -308,8 +312,9 @@ impl Executor {
                         prepare_inputs(&templater, &child, &step_ctx_clone, runs_data.as_ref())?;
                     add_special_use_param(&mut inputs, use_);
 
-                    // Create execution context for OAuth expansion
-                    let exec_ctx = crate::adapter::ExecutionContext::new(storage);
+                    // Create execution context for OAuth and secrets expansion
+                    let exec_ctx =
+                        crate::adapter::ExecutionContext::new(storage, secrets_provider.clone());
 
                     let outputs = adapter.execute(inputs, &exec_ctx).await?;
                     step_ctx_clone.set_output(child.id.to_string(), serde_json::to_value(outputs)?);
@@ -464,6 +469,7 @@ impl Executor {
             let templater = self.templater.clone();
             let runs_data = self.runs_data.clone();
             let storage = self.storage.clone();
+            let secrets_provider = self.secrets_provider.clone();
             let permit = semaphore.clone().acquire_owned().await.map_err(|e| {
                 BeemFlowError::adapter(format!("Failed to acquire semaphore: {}", e))
             })?;
@@ -482,7 +488,8 @@ impl Executor {
                     .for_each(|(k, v)| iter_ctx.set_output(k, v));
 
                 // Create execution context for OAuth expansion
-                let exec_ctx = crate::adapter::ExecutionContext::new(storage);
+                let exec_ctx =
+                    crate::adapter::ExecutionContext::new(storage, secrets_provider.clone());
 
                 // Execute steps - simple tool calls only in parallel foreach
                 for inner_step in &do_steps {
@@ -546,8 +553,11 @@ impl Executor {
         let mut inputs = prepare_inputs(&self.templater, step, step_ctx, self.runs_data.as_ref())?;
         add_special_use_param(&mut inputs, use_);
 
-        // Create execution context with storage for OAuth expansion, etc.
-        let ctx = crate::adapter::ExecutionContext::new(self.storage.clone());
+        // Create execution context with storage for OAuth and secrets expansion
+        let ctx = crate::adapter::ExecutionContext::new(
+            self.storage.clone(),
+            self.secrets_provider.clone(),
+        );
 
         // Execute with retry if configured
         let outputs = if let Some(ref retry) = step.retry {

@@ -57,6 +57,7 @@ pub mod graph;
 pub mod config;
 pub mod event;
 pub mod registry;
+pub mod secrets;
 pub mod storage;
 // TODO: Refactor cron module to use OperationRegistry
 // pub mod cron;

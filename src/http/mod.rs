@@ -276,8 +276,9 @@ pub async fn start_server(config: Config, interfaces: ServerInterfaces) -> Resul
 
     // Create webhook manager state
     let webhook_state = WebhookManagerState {
-        event_bus: state.registry.get_dependencies().event_bus.clone(),
-        registry_manager: state.registry.get_dependencies().registry_manager.clone(),
+        event_bus: dependencies.event_bus.clone(),
+        registry_manager: dependencies.registry_manager.clone(),
+        secrets_provider: dependencies.config.create_secrets_provider(),
     };
 
     // Build router with config for CORS

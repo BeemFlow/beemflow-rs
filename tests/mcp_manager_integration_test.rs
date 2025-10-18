@@ -10,17 +10,23 @@ use beemflow::mcp::McpManager;
 use beemflow::model::McpServerConfig;
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+// Helper to create test secrets provider
+fn test_secrets_provider() -> Arc<dyn beemflow::secrets::SecretsProvider> {
+    Arc::new(beemflow::secrets::EnvSecretsProvider::new())
+}
 
 #[test]
 fn test_mcp_manager_creation() {
-    let manager = McpManager::new();
+    let manager = McpManager::new(test_secrets_provider());
     // Should not panic and should be in valid state
     drop(manager);
 }
 
 #[test]
 fn test_mcp_manager_server_registration() {
-    let manager = McpManager::new();
+    let manager = McpManager::new(test_secrets_provider());
 
     // Register a test server configuration
     manager.register_server(
@@ -43,7 +49,7 @@ fn test_mcp_manager_server_registration() {
 
 #[test]
 fn test_mcp_manager_multiple_server_configs() {
-    let manager = McpManager::new();
+    let manager = McpManager::new(test_secrets_provider());
 
     // Register multiple servers
     let servers = vec![
@@ -83,7 +89,7 @@ fn test_mcp_manager_multiple_server_configs() {
 
 #[test]
 fn test_mcp_manager_config_override() {
-    let manager = McpManager::new();
+    let manager = McpManager::new(test_secrets_provider());
 
     // Register initial config
     manager.register_server(
@@ -116,7 +122,7 @@ fn test_mcp_manager_config_override() {
 
 #[test]
 fn test_mcp_manager_env_variables() {
-    let manager = McpManager::new();
+    let manager = McpManager::new(test_secrets_provider());
 
     let mut env = HashMap::new();
     env.insert("API_KEY".to_string(), "test-key-123".to_string());
@@ -142,7 +148,7 @@ fn test_mcp_manager_env_variables() {
 
 #[tokio::test]
 async fn test_mcp_manager_unconfigured_server_error() {
-    let manager = McpManager::new();
+    let manager = McpManager::new(test_secrets_provider());
 
     // Try to call tool on unconfigured server
     let result = manager
@@ -161,7 +167,7 @@ async fn test_mcp_manager_unconfigured_server_error() {
 #[test]
 fn test_mcp_manager_validation_empty_command() {
     // This should be caught during validation
-    let manager = McpManager::new();
+    let manager = McpManager::new(test_secrets_provider());
 
     // Note: validation happens when starting the server, not during registration
     manager.register_server(
@@ -181,7 +187,7 @@ fn test_mcp_manager_validation_empty_command() {
 
 #[tokio::test]
 async fn test_mcp_manager_invalid_command_error() {
-    let manager = McpManager::new();
+    let manager = McpManager::new(test_secrets_provider());
 
     // Register server with command that doesn't exist
     manager.register_server(
@@ -211,9 +217,9 @@ async fn test_mcp_manager_invalid_command_error() {
 }
 
 #[test]
-fn test_mcp_manager_default_trait() {
-    let manager1 = McpManager::new();
-    let manager2 = McpManager::default();
+fn test_mcp_manager_creation_consistency() {
+    let manager1 = McpManager::new(test_secrets_provider());
+    let manager2 = McpManager::new(test_secrets_provider());
 
     // Both should work the same way
     drop(manager1);
@@ -276,7 +282,7 @@ fn test_mcp_config_validation() {
         },
     ];
 
-    let manager = McpManager::new();
+    let manager = McpManager::new(test_secrets_provider());
     for (i, config) in valid_configs.into_iter().enumerate() {
         manager.register_server(format!("server-{}", i), config);
     }
@@ -286,7 +292,7 @@ fn test_mcp_config_validation() {
 fn test_mcp_manager_clone_and_thread_safety() {
     use std::sync::Arc;
 
-    let manager = Arc::new(McpManager::new());
+    let manager = Arc::new(McpManager::new(test_secrets_provider()));
 
     // Register config
     manager.register_server(

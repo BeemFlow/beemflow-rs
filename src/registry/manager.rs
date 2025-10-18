@@ -8,6 +8,7 @@ use crate::{Result, config::Config};
 /// Registry manager that coordinates multiple registries
 pub struct RegistryManager {
     registries: Vec<Box<dyn RegistrySource>>,
+    secrets_provider: std::sync::Arc<dyn crate::secrets::SecretsProvider>,
 }
 
 /// Trait for registry sources
@@ -63,8 +64,14 @@ impl RegistrySource for SmitheryRegistry {
 
 impl RegistryManager {
     /// Create a new registry manager with given sources (in priority order)
-    pub fn new(registries: Vec<Box<dyn RegistrySource>>) -> Self {
-        Self { registries }
+    pub fn new(
+        registries: Vec<Box<dyn RegistrySource>>,
+        secrets_provider: std::sync::Arc<dyn crate::secrets::SecretsProvider>,
+    ) -> Self {
+        Self {
+            registries,
+            secrets_provider,
+        }
     }
 
     /// Create standard manager with all registry types
@@ -79,7 +86,10 @@ impl RegistryManager {
     ///   ]
     /// }
     /// ```
-    pub fn standard(config: Option<&Config>) -> Self {
+    pub fn standard(
+        config: Option<&Config>,
+        secrets_provider: std::sync::Arc<dyn crate::secrets::SecretsProvider>,
+    ) -> Self {
         let mut registries: Vec<Box<dyn RegistrySource>> = Vec::new();
 
         // 1. Local registry (highest priority) - user's custom tools
@@ -110,7 +120,10 @@ impl RegistryManager {
         // 3. Default registry (built-in, lowest priority)
         registries.push(Box::new(DefaultRegistry::new()));
 
-        Self { registries }
+        Self {
+            registries,
+            secrets_provider,
+        }
     }
 
     /// List all servers from all registries (first wins for duplicates)
@@ -167,11 +180,19 @@ impl RegistryManager {
     /// but don't contain user credentials (which are stored in Storage).
     pub async fn list_oauth_providers(&self) -> Result<Vec<RegistryEntry>> {
         let all_servers = self.list_all_servers().await?;
-        let providers: Vec<RegistryEntry> = all_servers
-            .into_iter()
-            .filter(|e| e.entry_type == "oauth_provider")
-            .filter_map(super::default::expand_oauth_provider_env_vars)
-            .collect();
+
+        // Filter and expand OAuth providers
+        let mut providers = Vec::new();
+        for entry in all_servers {
+            if entry.entry_type == "oauth_provider"
+                && let Some(expanded) =
+                    super::default::expand_oauth_provider_env_vars(entry, &self.secrets_provider)
+                        .await
+            {
+                providers.push(expanded);
+            }
+        }
+
         Ok(providers)
     }
 
@@ -192,7 +213,9 @@ impl RegistryManager {
 
             if entry.entry_type == "oauth_provider" {
                 tracing::debug!("Entry is oauth_provider, expanding env vars for '{}'", name);
-                match super::default::expand_oauth_provider_env_vars(entry) {
+                match super::default::expand_oauth_provider_env_vars(entry, &self.secrets_provider)
+                    .await
+                {
                     Some(expanded) => {
                         let has_expanded_client_id = expanded.client_id.is_some();
                         let has_expanded_client_secret = expanded.client_secret.is_some();

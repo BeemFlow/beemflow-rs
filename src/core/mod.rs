@@ -228,28 +228,32 @@ pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
         None,
     )));
 
+    // Create secrets provider from config
+    let secrets_provider = config.create_secrets_provider();
+
     // Create and register MCP adapter
-    let mcp_adapter = Arc::new(crate::adapter::McpAdapter::new());
+    let mcp_adapter = Arc::new(crate::adapter::McpAdapter::new(secrets_provider.clone()));
     adapters.register(mcp_adapter.clone());
 
-    // Load tools and MCP servers from default registry (synchronously from embedded JSON)
-    Engine::load_default_registry_tools(&adapters, &mcp_adapter);
+    // Load tools and MCP servers from default registry
+    Engine::load_default_registry_tools(&adapters, &mcp_adapter, &secrets_provider).await;
 
     // Get limits from config
     let limits = config.get_limits();
 
-    // Create engine with shared storage
+    // Create engine with shared storage and secrets provider
     let engine = Arc::new(Engine::new(
         adapters,
         mcp_adapter,
         templater,
         event_bus.clone(),
         storage.clone(),
+        secrets_provider.clone(),
         limits.max_concurrent_tasks,
     ));
 
-    // Create registry manager with standard sources
-    let registry_manager = Arc::new(RegistryManager::standard(Some(&config)));
+    // Create registry manager with standard sources and secrets provider
+    let registry_manager = Arc::new(RegistryManager::standard(Some(&config), secrets_provider));
 
     Ok(Dependencies {
         storage,

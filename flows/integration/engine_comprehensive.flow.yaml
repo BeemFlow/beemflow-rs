@@ -110,7 +110,7 @@ steps:
     with:
       text: |
         Complex templating test:
-        - Environment user: {{ env.USER }}
+        - Environment user: {{ secrets.USER }}
         - Math expression: {{ base_number + 10 }}
         - String manipulation: {{"hello world" | title}}
         - Array operations: {{test_items | join(", ")}}

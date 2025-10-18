@@ -79,7 +79,7 @@ steps:
         - String: {{ "hello" | upper }}
         - Array: {{ vars.items | join(", ") }}
         - Length: {{ vars.items | length }}
-        - Env: {{ env.USER }}
+        - Secrets: {{ secrets.USER }}
         - Output ref: {{ steps.test_echo.text }}
 
   # Test 8: Nested foreach with parallel

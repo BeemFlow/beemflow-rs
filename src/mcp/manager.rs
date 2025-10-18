@@ -18,7 +18,11 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    pub async fn start(name: &str, config: &McpServerConfig) -> Result<Self> {
+    pub async fn start(
+        name: &str,
+        config: &McpServerConfig,
+        secrets_provider: &Arc<dyn crate::secrets::SecretsProvider>,
+    ) -> Result<Self> {
         if config.command.trim().is_empty() {
             return Err(BeemFlowError::validation("MCP command cannot be empty"));
         }
@@ -31,7 +35,9 @@ impl McpServer {
         }
         if let Some(ref env) = config.env {
             for (k, v) in env {
-                let expanded = crate::utils::expand_env_value(v);
+                // Use centralized secret expansion for $env: patterns
+                // This ensures consistency with the rest of the runtime codebase
+                let expanded = crate::secrets::expand_value(v, secrets_provider).await?;
                 if !v.starts_with("$env:") || expanded != *v {
                     cmd.env(k, expanded);
                 }
@@ -95,13 +101,15 @@ impl McpServer {
 pub struct McpManager {
     servers: Arc<RwLock<HashMap<String, Arc<McpServer>>>>,
     configs: Arc<RwLock<HashMap<String, McpServerConfig>>>,
+    secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
 }
 
 impl McpManager {
-    pub fn new() -> Self {
+    pub fn new(secrets_provider: Arc<dyn crate::secrets::SecretsProvider>) -> Self {
         Self {
             servers: Arc::new(RwLock::new(HashMap::new())),
             configs: Arc::new(RwLock::new(HashMap::new())),
+            secrets_provider,
         }
     }
 
@@ -129,7 +137,7 @@ impl McpManager {
                 ))
             })?;
 
-        let server = Arc::new(McpServer::start(server_name, &config).await?);
+        let server = Arc::new(McpServer::start(server_name, &config, &self.secrets_provider).await?);
         self.servers
             .write()
             .insert(server_name.to_string(), server.clone());
@@ -144,12 +152,6 @@ impl McpManager {
     ) -> Result<Value> {
         let server = self.get_or_start_server(server_name).await?;
         server.call_tool(tool_name, arguments).await
-    }
-}
-
-impl Default for McpManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

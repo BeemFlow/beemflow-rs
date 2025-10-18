@@ -1,6 +1,5 @@
 use super::*;
 use crate::config::{Config, McpServerConfig, RegistryConfig};
-use crate::utils::expand_env_value;
 use std::fs;
 use tempfile::TempDir;
 
@@ -27,15 +26,6 @@ fn test_config_validation() {
 
     config.storage.driver = String::new();
     assert!(config.validate().is_err());
-}
-
-#[test]
-fn test_expand_env_value() {
-    unsafe {
-        std::env::set_var("TEST_VAR", "test_value");
-    }
-    assert_eq!(expand_env_value("$env:TEST_VAR"), "test_value");
-    assert_eq!(expand_env_value("plain_value"), "plain_value");
 }
 
 #[test]

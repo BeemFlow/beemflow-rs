@@ -32,11 +32,13 @@ fn test_default_registry_loading() {
     println!("Found http.fetch: {:?}", http_fetch.unwrap().name);
 }
 
-#[test]
-fn test_adapter_registration() {
+#[tokio::test]
+async fn test_adapter_registration() {
     let adapters = Arc::new(AdapterRegistry::new());
-    let mcp_adapter = Arc::new(crate::adapter::McpAdapter::new());
-    Engine::load_default_registry_tools(&adapters, &mcp_adapter);
+    let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
+        Arc::new(crate::secrets::EnvSecretsProvider::new());
+    let mcp_adapter = Arc::new(crate::adapter::McpAdapter::new(secrets_provider.clone()));
+    Engine::load_default_registry_tools(&adapters, &mcp_adapter, &secrets_provider).await;
 
     // Print all registered
     let all = adapters.all();
@@ -564,63 +566,6 @@ async fn test_adapter_error_propagation() {
 
     let outputs = result.unwrap();
     assert!(outputs.outputs.contains_key("s1"), "Should have s1 output");
-}
-
-#[tokio::test]
-async fn test_environment_variables_in_templates() {
-    unsafe {
-        std::env::set_var("TEST_ENV_VAR", "test_value_123");
-        std::env::set_var("BEEMFLOW_TEST_TOKEN", "secret_token_456");
-    }
-
-    let engine = Engine::for_testing().await;
-    let flow = Flow {
-        name: "env_test".to_string().into(),
-        description: None,
-        version: None,
-        on: Some(Trigger::Single("cli.manual".to_string())),
-        cron: None,
-        vars: None,
-        steps: vec![Step {
-            id: "test_env".to_string().into(),
-            use_: Some("core.echo".to_string()),
-            with: Some({
-                let mut m = HashMap::new();
-                m.insert(
-                    "text".to_string(),
-                    serde_json::json!(
-                        "Env var: {{ env.TEST_ENV_VAR }}, Token: {{ env.BEEMFLOW_TEST_TOKEN }}"
-                    ),
-                );
-                m
-            }),
-            ..Default::default()
-        }],
-        catch: None,
-        mcp_servers: None,
-    };
-
-    let result = engine.execute(&flow, HashMap::new()).await;
-    assert!(
-        result.is_ok(),
-        "Environment variable templating should work"
-    );
-
-    let outputs = result.unwrap();
-    let text = outputs
-        .outputs
-        .get("test_env")
-        .unwrap()
-        .get("text")
-        .unwrap()
-        .as_str()
-        .unwrap();
-    assert_eq!(text, "Env var: test_value_123, Token: secret_token_456");
-
-    unsafe {
-        std::env::remove_var("TEST_ENV_VAR");
-        std::env::remove_var("BEEMFLOW_TEST_TOKEN");
-    }
 }
 
 #[tokio::test]

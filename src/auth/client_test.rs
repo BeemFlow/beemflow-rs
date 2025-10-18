@@ -20,7 +20,12 @@ fn create_test_credential() -> OAuthCredential {
 #[tokio::test]
 async fn test_get_token_no_credential() {
     let storage = Arc::new(SqliteStorage::new(":memory:").await.expect("Failed to create SQLite storage"));
-    let registry_manager = Arc::new(RegistryManager::standard(None));
+
+    // Create secrets provider for test
+    let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
+        Arc::new(crate::secrets::EnvSecretsProvider::new());
+
+    let registry_manager = Arc::new(RegistryManager::standard(None, secrets_provider));
     let client = OAuthClientManager::new(
         storage,
         registry_manager,
@@ -35,7 +40,12 @@ async fn test_get_token_no_credential() {
 #[tokio::test]
 async fn test_get_token_valid() {
     let storage = Arc::new(SqliteStorage::new(":memory:").await.expect("Failed to create SQLite storage"));
-    let registry_manager = Arc::new(RegistryManager::standard(None));
+
+    // Create secrets provider for test
+    let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
+        Arc::new(crate::secrets::EnvSecretsProvider::new());
+
+    let registry_manager = Arc::new(RegistryManager::standard(None, secrets_provider));
     let cred = create_test_credential();
 
     storage.save_oauth_credential(&cred).await.unwrap();

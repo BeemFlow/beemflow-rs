@@ -32,16 +32,9 @@ impl Templater {
         // This allows {{nonexistent.field}} to return undefined instead of error
         env.set_undefined_behavior(minijinja::UndefinedBehavior::Chainable);
 
-        // Add BeemFlow-specific globals - expose env vars for workflow access
-        // NOTE: This exposes all environment variables. In production, consider
-        // filtering sensitive vars or using a whitelist approach.
-        let env_vars = std::env::vars().collect::<HashMap<_, _>>();
-        let env_value = if let Ok(json_value) = serde_json::to_value(&env_vars) {
-            Value::from_serialize(&json_value)
-        } else {
-            Value::UNDEFINED
-        };
-        env.add_global("env", env_value);
+        // Security: Environment variables are NOT exposed as a global "env" object.
+        // All environment variable access must go through the "secrets" namespace
+        // which is populated by Engine::collect_secrets() via the SecretsProvider.
 
         Self { env: Arc::new(env) }
     }

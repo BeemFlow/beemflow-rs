@@ -1,6 +1,6 @@
 //! Tests for webhook
 
-use crate::http::webhook::{expand_env_value, extract_json_path, matches_event};
+use crate::http::webhook::{extract_json_path, matches_event};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -40,19 +40,4 @@ fn test_matches_event() {
 
     conditions.insert("user_id".to_string(), json!("456"));
     assert!(!matches_event(&payload, &conditions));
-}
-
-#[test]
-fn test_expand_env_value() {
-    unsafe {
-        std::env::set_var("TEST_VAR", "test_value");
-    }
-
-    assert_eq!(expand_env_value("$env:TEST_VAR"), "test_value");
-    assert_eq!(expand_env_value("literal_value"), "literal_value");
-    assert_eq!(expand_env_value("$env:NONEXISTENT"), "");
-
-    unsafe {
-        std::env::remove_var("TEST_VAR");
-    }
 }

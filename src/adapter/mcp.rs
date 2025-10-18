@@ -14,9 +14,9 @@ pub struct McpAdapter {
 }
 
 impl McpAdapter {
-    pub fn new() -> Self {
+    pub fn new(secrets_provider: Arc<dyn crate::secrets::SecretsProvider>) -> Self {
         Self {
-            manager: Arc::new(McpManager::new()),
+            manager: Arc::new(McpManager::new(secrets_provider)),
         }
     }
 
@@ -72,11 +72,6 @@ impl McpAdapter {
     }
 }
 
-impl Default for McpAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 #[async_trait]
 impl Adapter for McpAdapter {

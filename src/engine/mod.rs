@@ -47,6 +47,7 @@ pub struct Engine {
     templater: Arc<Templater>,
     event_bus: Arc<dyn EventBus>,
     storage: Arc<dyn Storage>,
+    secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
     max_concurrent_tasks: usize,
 }
 
@@ -58,6 +59,7 @@ impl Engine {
         templater: Arc<Templater>,
         event_bus: Arc<dyn EventBus>,
         storage: Arc<dyn Storage>,
+        secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
         max_concurrent_tasks: usize,
     ) -> Self {
         Self {
@@ -66,14 +68,19 @@ impl Engine {
             templater,
             event_bus,
             storage,
+            secrets_provider,
             max_concurrent_tasks,
         }
     }
 
-    /// Load tools and MCP servers from default registry into adapter registry (sync)
-    pub fn load_default_registry_tools(
+    /// Load tools and MCP servers from default registry into adapter registry
+    ///
+    /// This method uses the secrets provider to expand environment variable references
+    /// in MCP server configurations.
+    pub async fn load_default_registry_tools(
         adapters: &Arc<AdapterRegistry>,
         mcp_adapter: &Arc<crate::adapter::McpAdapter>,
+        secrets_provider: &Arc<dyn crate::secrets::SecretsProvider>,
     ) {
         // Load embedded default.json directly
         let data = include_str!("../registry/default.json");
@@ -111,13 +118,24 @@ impl Engine {
                         "mcp_server" => {
                             mcp_count += 1;
 
-                            // Expand environment variables in env map
-                            let env = entry.env.map(|env_map| {
-                                env_map
-                                    .into_iter()
-                                    .map(|(k, v)| (k, Self::expand_env_value(&v)))
-                                    .collect()
-                            });
+                            // Expand environment variables in env map using secrets provider
+                            let env = if let Some(env_map) = entry.env {
+                                let mut expanded_env = HashMap::new();
+                                for (k, v) in env_map {
+                                    match crate::secrets::expand_value(&v, secrets_provider).await {
+                                        Ok(expanded) => {
+                                            expanded_env.insert(k, expanded);
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Failed to expand env var {}: {}", k, e);
+                                            expanded_env.insert(k, v);
+                                        }
+                                    }
+                                }
+                                Some(expanded_env)
+                            } else {
+                                None
+                            };
 
                             // Create MCP server config
                             let config = crate::model::McpServerConfig {
@@ -149,16 +167,6 @@ impl Engine {
             Err(e) => {
                 tracing::error!("Failed to load default registry: {}", e);
             }
-        }
-    }
-
-    /// Expand environment variable references ($env:VARNAME)
-    fn expand_env_value(value: &str) -> String {
-        if value.starts_with("$env:") {
-            let var_name = value.trim_start_matches("$env:");
-            std::env::var(var_name).unwrap_or_default()
-        } else {
-            value.to_string()
         }
     }
 
@@ -195,6 +203,7 @@ impl Engine {
             self.templater.clone(),
             self.event_bus.clone(),
             self.storage.clone(),
+            self.secrets_provider.clone(),
             runs_data,
             self.max_concurrent_tasks,
         );
@@ -270,6 +279,7 @@ impl Engine {
             self.templater.clone(),
             self.event_bus.clone(),
             self.storage.clone(),
+            self.secrets_provider.clone(),
             runs_data,
             self.max_concurrent_tasks,
         );
@@ -314,8 +324,8 @@ impl Engine {
         flow: &Flow,
         event: HashMap<String, serde_json::Value>,
     ) -> Result<(StepContext, Uuid)> {
-        // Collect secrets from event
-        let secrets = self.collect_secrets(&event);
+        // Collect secrets from event and secrets provider
+        let secrets = self.collect_secrets(&event).await;
 
         // Create step context
         let step_ctx = StepContext::new(
@@ -414,7 +424,7 @@ impl Engine {
             .as_ref()
             .ok_or_else(|| crate::BeemFlowError::validation("no catch blocks defined"))?;
 
-        let secrets = self.collect_secrets(event);
+        let secrets = self.collect_secrets(event).await;
         let step_ctx = StepContext::new(
             event.clone(),
             flow.vars.clone().unwrap_or_default(),
@@ -427,6 +437,7 @@ impl Engine {
             self.templater.clone(),
             self.event_bus.clone(),
             self.storage.clone(),
+            self.secrets_provider.clone(),
             None,
             self.max_concurrent_tasks,
         );
@@ -498,28 +509,42 @@ impl Engine {
         Ok(catch_outputs)
     }
 
-    /// Collect secrets from event data
-    fn collect_secrets(
+    /// Collect secrets from event data and secrets provider
+    ///
+    /// Priority:
+    /// 1. Secrets from event.secrets object (highest priority)
+    /// 2. Event keys starting with $env prefix
+    /// 3. All environment variables from secrets provider (lowest priority)
+    async fn collect_secrets(
         &self,
         event: &HashMap<String, serde_json::Value>,
     ) -> HashMap<String, serde_json::Value> {
         let mut secrets = HashMap::new();
 
-        // Extract secrets from event
+        // 1. Get ALL environment variables from secrets provider (base layer)
+        if let Ok(all_env_secrets) = self.secrets_provider.get_all_secrets().await {
+            for (k, v) in all_env_secrets {
+                secrets.insert(k, serde_json::Value::String(v));
+            }
+        } else {
+            tracing::warn!("Failed to get secrets from provider");
+        }
+
+        // 2. Overlay event keys starting with $env prefix (higher priority)
+        for (k, v) in event {
+            if k.starts_with(crate::constants::ENV_VAR_PREFIX) {
+                let env_var = k.trim_start_matches(crate::constants::ENV_VAR_PREFIX);
+                secrets.insert(env_var.to_string(), v.clone());
+            }
+        }
+
+        // 3. Overlay secrets from event.secrets object (highest priority)
         if let Some(event_secrets) = event
             .get(crate::constants::SECRETS_KEY)
             .and_then(|v| v.as_object())
         {
             for (k, v) in event_secrets {
                 secrets.insert(k.clone(), v.clone());
-            }
-        }
-
-        // Collect environment variables with $env prefix
-        for (k, v) in event {
-            if k.starts_with(crate::constants::ENV_VAR_PREFIX) {
-                let env_var = k.trim_start_matches(crate::constants::ENV_VAR_PREFIX);
-                secrets.insert(env_var.to_string(), v.clone());
             }
         }
 
@@ -617,12 +642,16 @@ impl Engine {
             None,
         )));
 
+        // Create secrets provider
+        let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
+            Arc::new(crate::secrets::EnvSecretsProvider::new());
+
         // Create and register MCP adapter
-        let mcp_adapter = Arc::new(crate::adapter::McpAdapter::new());
+        let mcp_adapter = Arc::new(crate::adapter::McpAdapter::new(secrets_provider.clone()));
         adapters.register(mcp_adapter.clone());
 
         // Load tools and MCP servers from default registry
-        Self::load_default_registry_tools(&adapters, &mcp_adapter);
+        Self::load_default_registry_tools(&adapters, &mcp_adapter, &secrets_provider).await;
 
         Self::new(
             adapters,
@@ -630,6 +659,7 @@ impl Engine {
             Arc::new(Templater::new()),
             Arc::new(crate::event::InProcEventBus::new()),
             Arc::new(storage),
+            secrets_provider,
             1000, // Default max concurrent tasks for testing
         )
     }

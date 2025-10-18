@@ -5,11 +5,11 @@
 
 #[tokio::main]
 async fn main() {
-    // This loads environment variables for API keys, secrets, etc.
-    let _ = dotenvy::dotenv();
-
     // Initialize logging
     beemflow::init_logging();
+
+    // Note: .env file loading now happens automatically when EnvSecretsProvider
+    // is created via Config::create_secrets_provider()
 
     // Run CLI (delegates to operations)
     if let Err(e) = beemflow::cli::run().await {

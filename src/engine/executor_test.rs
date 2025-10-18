@@ -20,7 +20,19 @@ async fn setup_executor() -> Executor {
             .expect("Failed to create SQLite storage"),
     );
 
-    Executor::new(adapters, templater, event_bus, storage, None, 1000)
+    // Create secrets provider for testing
+    let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
+        Arc::new(crate::secrets::EnvSecretsProvider::new());
+
+    Executor::new(
+        adapters,
+        templater,
+        event_bus,
+        storage,
+        secrets_provider,
+        None,
+        1000,
+    )
 }
 
 #[tokio::test]

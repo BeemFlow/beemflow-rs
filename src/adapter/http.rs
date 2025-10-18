@@ -27,8 +27,9 @@ impl HttpAdapter {
 
     /// Execute HTTP request based on manifest or generic http call
     ///
-    /// OAuth tokens in headers (e.g., `Authorization: $oauth:github:default`) are
-    /// automatically expanded using the ExecutionContext's storage.
+    /// Secrets ($env:) and OAuth tokens ($oauth:) in headers are automatically expanded:
+    /// - $env: patterns are expanded using the ExecutionContext's secrets_provider
+    /// - $oauth: patterns are expanded using the ExecutionContext's storage
     async fn execute_request(
         &self,
         inputs: HashMap<String, Value>,
@@ -38,7 +39,8 @@ impl HttpAdapter {
         let (url, method, mut headers, body) = if let Some(manifest) = &self.tool_manifest {
             // If manifest has endpoint, use it; otherwise fall back to inputs
             if manifest.endpoint.is_some() {
-                self.build_from_manifest(manifest, &inputs)?
+                self.build_from_manifest(manifest, &inputs, &ctx.secrets_provider)
+                    .await?
             } else {
                 // Manifest exists but no endpoint - generic HTTP like http.fetch
                 self.build_from_inputs(&inputs)?
@@ -118,10 +120,11 @@ impl HttpAdapter {
         Ok(result)
     }
 
-    fn build_from_manifest(
+    async fn build_from_manifest(
         &self,
         manifest: &ToolManifest,
         inputs: &HashMap<String, Value>,
+        secrets_provider: &Arc<dyn crate::secrets::SecretsProvider>,
     ) -> Result<HttpRequestComponents> {
         let mut url = manifest
             .endpoint
@@ -154,11 +157,11 @@ impl HttpAdapter {
             }
         }
 
-        // Process headers
+        // Process headers with secret expansion
         let mut headers = HashMap::new();
         if let Some(ref manifest_headers) = manifest.headers {
             for (k, v) in manifest_headers {
-                let expanded = self.expand_header_value(v)?;
+                let expanded = self.expand_header_value(v, secrets_provider).await?;
                 headers.insert(k.clone(), expanded);
             }
         }
@@ -184,48 +187,40 @@ impl HttpAdapter {
         Ok((url, method, headers, body))
     }
 
-    /// Expand $env: and $oauth: references in header values
+    /// Expand $env: references in header values using the secrets provider
     ///
-    /// Returns an error if a required environment variable is not found.
-    /// OAuth expansion is deferred to execution time.
-    /// Automatically trims whitespace from environment variable values.
-    fn expand_header_value(&self, value: &str) -> Result<String> {
-        // Handle $env:VARNAME
-        if value.starts_with("$env:") {
-            let var_name = value.trim_start_matches("$env:");
-            return std::env::var(var_name)
-                .map(|v| v.trim().to_string()) // Trim whitespace/newlines
-                .map_err(|_| {
-                    crate::BeemFlowError::adapter(format!(
-                        "Environment variable '{}' not found. Required for header value '{}'. \
-                        Set this variable in your environment or .env file.",
-                        var_name, value
-                    ))
-                });
-        }
-
-        // Handle Bearer $env: prefix
-        if value.starts_with("Bearer $env:") {
-            let var_name = value.trim_start_matches("Bearer $env:");
-            return std::env::var(var_name)
-                .map(|token| format!("Bearer {}", token.trim())) // Trim whitespace/newlines
-                .map_err(|_| {
-                    crate::BeemFlowError::adapter(format!(
-                        "Environment variable '{}' not found. Required for Bearer token. \
-                        Set this variable in your environment or .env file.",
-                        var_name
-                    ))
-                });
-        }
-
-        // Handle $oauth:provider:integration
-        // Note: OAuth expansion is deferred to execution time
-        // This just marks the value for expansion
+    /// This uses the centralized secrets::expand_value() function to ensure:
+    /// - Consistent secret expansion across the codebase (DRY)
+    /// - Support for future secret backends (AWS, Vault)
+    /// - Proper error handling for missing secrets
+    ///
+    /// OAuth expansion ($oauth:) is deferred to execution time via expand_oauth_in_headers().
+    /// Automatically trims whitespace from expanded values.
+    async fn expand_header_value(
+        &self,
+        value: &str,
+        secrets_provider: &Arc<dyn crate::secrets::SecretsProvider>,
+    ) -> Result<String> {
+        // OAuth expansion is deferred to execution time - just pass through
         if value.starts_with("$oauth:") {
             return Ok(value.to_string());
         }
 
-        Ok(value.to_string())
+        // Use centralized secret expansion for $env: patterns
+        let expanded = crate::secrets::expand_value(value, secrets_provider).await?;
+
+        // Strict validation: ensure all $env: patterns were fully expanded
+        // This is critical for auth headers - fail fast if secrets are missing
+        if expanded.contains("$env:") {
+            return Err(crate::BeemFlowError::adapter(format!(
+                "Failed to expand all secrets in header value: '{}'. \
+                Ensure all referenced environment variables are set in your .env file or environment.",
+                value
+            )));
+        }
+
+        // Trim whitespace/newlines (common issue with secrets from CI/CD)
+        Ok(expanded.trim().to_string())
     }
 
     /// Expand OAuth tokens in headers at execution time
@@ -373,9 +368,13 @@ impl HttpAdapter {
     }
 
     /// Enrich inputs with defaults from manifest parameters
-    fn enrich_inputs_with_defaults(
+    ///
+    /// Expands $env: patterns in default values using the secrets provider.
+    /// This ensures consistent secret handling across all parameter sources.
+    async fn enrich_inputs_with_defaults(
         &self,
         mut inputs: HashMap<String, Value>,
+        secrets_provider: &Arc<dyn crate::secrets::SecretsProvider>,
     ) -> HashMap<String, Value> {
         if let Some(manifest) = &self.tool_manifest
             && let Some(properties) = manifest
@@ -393,9 +392,11 @@ impl HttpAdapter {
                     if let Some(default_str) = default.as_str() {
                         if default_str.starts_with("$env:") {
                             let var_name = default_str.trim_start_matches("$env:");
-                            if let Ok(env_val) = std::env::var(var_name) {
-                                inputs.insert(key.clone(), Value::String(env_val));
+                            // Use secrets provider for consistent secret access
+                            if let Ok(Some(secret_val)) = secrets_provider.get_secret(var_name).await {
+                                inputs.insert(key.clone(), Value::String(secret_val));
                             }
+                            // If secret not found, don't insert default (parameter remains unset)
                         } else {
                             inputs.insert(key.clone(), default.clone());
                         }
@@ -421,7 +422,10 @@ impl Adapter for HttpAdapter {
         ctx: &super::ExecutionContext,
     ) -> Result<HashMap<String, Value>> {
         // Enrich inputs with defaults from manifest if present
-        let enriched_inputs = self.enrich_inputs_with_defaults(inputs);
+        // This uses secrets_provider to expand $env: patterns in default values
+        let enriched_inputs = self
+            .enrich_inputs_with_defaults(inputs, &ctx.secrets_provider)
+            .await;
         self.execute_request(enriched_inputs, ctx).await
     }
 

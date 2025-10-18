@@ -190,28 +190,8 @@ struct RegistryEntry {
     pub endpoint: Option<String>,
 }
 
-/// Secrets provider trait for resolving secrets
-///
-/// # TODO: Incomplete Feature
-///
-/// This trait is currently **unused** - secrets work via `Engine::collect_secrets()` which
-/// extracts secrets from event data and environment variables (BEEMFLOW_SECRET_*).
-///
-/// **Future Implementation:**
-/// - Inject `SecretsProvider` into `Engine` for pluggable backends
-/// - Support Vault, AWS Secrets Manager, Google Secret Manager, etc.
-/// - Use `Config.secrets` to instantiate the appropriate provider
-///
-/// **Current Workaround:**
-/// Secrets are accessible via `{{ secrets.KEY }}` template syntax, populated from:
-/// - `event.secrets` object
-/// - Environment variables prefixed with `BEEMFLOW_SECRET_`
-///
-/// See `src/engine/mod.rs:501-526` for current implementation.
-pub trait SecretsProvider: Send + Sync {
-    /// Get a secret value by key
-    fn get_secret(&self, key: &str) -> Result<String>;
-}
+// SecretsProvider trait has been moved to src/secrets/mod.rs
+// All secret management now goes through the secrets module
 
 /// HTTP server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -479,6 +459,38 @@ impl Config {
     /// Get runtime limits (with defaults if not configured)
     pub fn get_limits(&self) -> LimitsConfig {
         self.limits.clone().unwrap_or_default()
+    }
+
+    /// Create a secrets provider based on configuration
+    ///
+    /// Returns the appropriate SecretsProvider implementation based on the
+    /// `secrets.driver` config value:
+    /// - "env" (default): EnvSecretsProvider - reads from environment variables
+    /// - "aws" (future): AwsSecretsProvider - reads from AWS Secrets Manager
+    /// - "vault" (future): VaultSecretsProvider - reads from HashiCorp Vault
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use beemflow::config::Config;
+    /// use beemflow::secrets::SecretsProvider;
+    ///
+    /// let config = Config::default();
+    /// let provider = config.create_secrets_provider();
+    /// ```
+    pub fn create_secrets_provider(&self) -> std::sync::Arc<dyn crate::secrets::SecretsProvider> {
+        use std::sync::Arc;
+
+        match self.secrets.as_ref().and_then(|s| s.driver.as_deref()) {
+            // Future: AWS Secrets Manager
+            // Some("aws") => Arc::new(AwsSecretsProvider::new(self.secrets.as_ref())),
+
+            // Future: HashiCorp Vault
+            // Some("vault") => Arc::new(VaultSecretsProvider::new(self.secrets.as_ref())),
+
+            // Default: Environment variables
+            _ => Arc::new(crate::secrets::EnvSecretsProvider::new()),
+        }
     }
 
     /// Load configuration from file
@@ -1076,12 +1088,37 @@ pub fn get_merged_mcp_server_config(cfg: &Config, host: &str) -> Result<McpServe
     Ok(merged)
 }
 
+/// Expand environment variable references in config values (bootstrap-time only)
+///
+/// **LIFECYCLE: Config-time (bootstrap) only**
+///
+/// This function is for CONFIG LOADING before the SecretsProvider exists.
+/// For RUNTIME expansion, use `secrets::expand_value()` instead.
+///
+/// This solves the chicken-and-egg problem: config tells us which SecretsProvider
+/// to create, so we can't use SecretsProvider to load config.
+fn expand_env_value_at_config_time(value: &str) -> String {
+    use once_cell::sync::Lazy;
+    use regex::Regex;
+
+    static ENV_VAR_PATTERN: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"\$env:([A-Za-z_][A-Za-z0-9_]*)").expect("Invalid environment variable regex")
+    });
+
+    ENV_VAR_PATTERN
+        .replace_all(value, |caps: &regex::Captures| {
+            let var_name = &caps[1];
+            env::var(var_name).unwrap_or_else(|_| caps[0].to_string())
+        })
+        .to_string()
+}
+
 /// Inject environment variables into registry configuration
 pub fn inject_env_vars_into_registry(reg: &mut HashMap<String, Value>) {
     for (k, v) in reg.iter_mut() {
         if let Some(str_val) = v.as_str() {
-            // Use shared utility to expand $env:VARNAME format
-            let expanded = crate::utils::expand_env_value(str_val);
+            // Use config-time expansion for $env:VARNAME format
+            let expanded = expand_env_value_at_config_time(str_val);
             if expanded != *str_val {
                 *v = Value::String(expanded);
             }

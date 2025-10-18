@@ -112,13 +112,27 @@ pub struct ExecutionContext {
     /// - HttpAdapter calls: `ctx.storage.get_oauth_credential("github", "default")`
     /// - Token is injected into request headers automatically
     pub storage: Arc<dyn Storage>,
+
+    /// Secrets provider for environment variable and secret access
+    ///
+    /// Used by HttpAdapter for expanding $env: references in headers and defaults:
+    /// - Tool manifest specifies: `Authorization: Bearer $env:API_KEY`
+    /// - HttpAdapter calls: `ctx.secrets_provider.get_secret("API_KEY")`
+    /// - Secret value is injected into request headers automatically
+    pub secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
     // Future fields will be added here as needed without breaking changes
 }
 
 impl ExecutionContext {
     /// Create a new execution context
-    pub fn new(storage: Arc<dyn Storage>) -> Self {
-        Self { storage }
+    pub fn new(
+        storage: Arc<dyn Storage>,
+        secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
+    ) -> Self {
+        Self {
+            storage,
+            secrets_provider,
+        }
     }
 }
 

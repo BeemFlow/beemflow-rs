@@ -27,6 +27,7 @@ type HmacSha256 = Hmac<Sha256>;
 pub struct WebhookManagerState {
     pub event_bus: Arc<dyn EventBus>,
     pub registry_manager: Arc<RegistryManager>,
+    pub secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
 }
 
 /// Parsed webhook event
@@ -110,7 +111,16 @@ async fn handle_webhook(
 
     // Verify signature if configured
     if let Some(ref secret) = webhook_config.secret {
-        let secret_value = expand_env_value(secret);
+        // Expand $env: patterns in the secret value
+        let secret_value = match crate::secrets::expand_value(secret, &state.secrets_provider).await
+        {
+            Ok(val) => val,
+            Err(e) => {
+                tracing::error!("Failed to expand webhook secret: {}", e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Configuration error").into_response();
+            }
+        };
+
         if !secret_value.is_empty()
             && !verify_webhook_signature(&webhook_config, &headers, &body, &secret_value)
         {
@@ -293,14 +303,4 @@ pub(crate) fn extract_json_path(data: &Value, path: &str) -> Option<Value> {
     }
 
     Some(current.clone())
-}
-
-/// Expand environment variable references ($env:VAR_NAME)
-pub(crate) fn expand_env_value(value: &str) -> String {
-    if value.starts_with("$env:") {
-        let var_name = value.trim_start_matches("$env:");
-        std::env::var(var_name).unwrap_or_default()
-    } else {
-        value.to_string()
-    }
 }

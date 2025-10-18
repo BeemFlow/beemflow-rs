@@ -3,7 +3,7 @@ description: Integration test for templating engine and environment loading
 on: cli.manual
 
 vars:
-  user_name: "{{ env.USER }}"
+  user_name: "{{ secrets.USER }}"
   test_object:
     name: "Test Object"
     values: [1, 2, 3, 4, 5]
@@ -64,14 +64,14 @@ steps:
         String ops: {{ "hello" | upper | reverse }}
         Boolean: {{ test_object.values | length > 0 }}
 
-  # Test environment variable access
+  # Test secrets/environment variable access
   - id: env_test
     use: core.echo
     with:
       text: |
-        User: {{ env.USER }}
-        Home: {{ env.HOME }}
-        Path exists: {{ env.PATH | length > 0 }}
+        User: {{ secrets.USER }}
+        Home: {{ secrets.HOME }}
+        Path exists: {{ secrets.PATH | length > 0 }}
 
   # Test foreach with templated IDs
   - id: templated_foreach

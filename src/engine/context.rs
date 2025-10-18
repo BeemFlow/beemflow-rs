@@ -141,18 +141,10 @@ impl StepContext {
             &snapshot.outputs,
         );
 
-        // Add environment variables
-        let env: HashMap<String, String> = std::env::vars().collect();
-        // Safe: HashMap<String, String> serialization to JSON should never fail
-        if let Ok(env_value) = serde_json::to_value(&env) {
-            data.insert(crate::constants::TEMPLATE_FIELD_ENV.to_string(), env_value);
-        } else {
-            tracing::warn!("Failed to serialize environment variables, using empty object");
-            data.insert(
-                crate::constants::TEMPLATE_FIELD_ENV.to_string(),
-                Value::Object(serde_json::Map::new()),
-            );
-        }
+        // Security: Environment variables are NOT exposed via the "env" namespace.
+        // All environment variables are available through the "secrets" namespace,
+        // which is populated by Engine::collect_secrets() via the SecretsProvider.
+        // This provides a single, controlled interface for all secret access.
 
         // Add runs access if provided
         if let Some(runs) = runs_data {

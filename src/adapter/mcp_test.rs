@@ -7,22 +7,31 @@ use std::sync::Arc;
 
 // Helper to create test execution context
 async fn test_context() -> ExecutionContext {
-    ExecutionContext::new(Arc::new(
+    let storage = Arc::new(
         SqliteStorage::new(":memory:")
             .await
             .expect("Failed to create in-memory SQLite storage"),
-    ))
+    );
+    let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
+        Arc::new(crate::secrets::EnvSecretsProvider::new());
+
+    ExecutionContext::new(storage, secrets_provider)
+}
+
+// Helper to create test secrets provider
+fn test_secrets_provider() -> Arc<dyn crate::secrets::SecretsProvider> {
+    Arc::new(crate::secrets::EnvSecretsProvider::new())
 }
 
 #[test]
 fn test_mcp_adapter_creation() {
-    let adapter = McpAdapter::new();
+    let adapter = McpAdapter::new(test_secrets_provider());
     assert_eq!(adapter.id(), ADAPTER_ID_MCP);
 }
 
 #[test]
 fn test_mcp_adapter_config() {
-    let adapter = McpAdapter::new();
+    let adapter = McpAdapter::new(test_secrets_provider());
     adapter.register_server(
         "test".to_string(),
         McpServerConfig {
@@ -39,7 +48,7 @@ fn test_mcp_adapter_config() {
 
 #[test]
 fn test_mcp_adapter_manifest() {
-    let adapter = McpAdapter::new();
+    let adapter = McpAdapter::new(test_secrets_provider());
     assert!(
         adapter.manifest().is_none(),
         "MCP adapter should not have manifest"
@@ -48,7 +57,7 @@ fn test_mcp_adapter_manifest() {
 
 #[tokio::test]
 async fn test_mcp_adapter_missing_use() {
-    let adapter = McpAdapter::new();
+    let adapter = McpAdapter::new(test_secrets_provider());
     let inputs = {
         let mut m = HashMap::new();
         m.insert("test".to_string(), Value::String("value".to_string()));
@@ -66,7 +75,7 @@ async fn test_mcp_adapter_missing_use() {
 
 #[tokio::test]
 async fn test_mcp_adapter_invalid_use_type() {
-    let adapter = McpAdapter::new();
+    let adapter = McpAdapter::new(test_secrets_provider());
     let inputs = {
         let mut m = HashMap::new();
         m.insert("__use".to_string(), Value::Number(123.into()));
@@ -79,7 +88,7 @@ async fn test_mcp_adapter_invalid_use_type() {
 
 #[tokio::test]
 async fn test_mcp_adapter_invalid_format() {
-    let adapter = McpAdapter::new();
+    let adapter = McpAdapter::new(test_secrets_provider());
 
     let test_cases = vec![
         "invalid://format",
@@ -114,7 +123,7 @@ async fn test_mcp_adapter_invalid_format() {
 
 #[tokio::test]
 async fn test_mcp_adapter_unconfigured_server() {
-    let adapter = McpAdapter::new();
+    let adapter = McpAdapter::new(test_secrets_provider());
     let inputs = {
         let mut m = HashMap::new();
         m.insert(
@@ -135,7 +144,7 @@ async fn test_mcp_adapter_unconfigured_server() {
 
 #[tokio::test]
 async fn test_mcp_adapter_multiple_server_configs() {
-    let adapter = McpAdapter::new();
+    let adapter = McpAdapter::new(test_secrets_provider());
 
     // Register multiple servers
     adapter.register_server(
@@ -182,7 +191,7 @@ async fn test_mcp_adapter_multiple_server_configs() {
 
 #[tokio::test]
 async fn test_mcp_adapter_config_override() {
-    let adapter = McpAdapter::new();
+    let adapter = McpAdapter::new(test_secrets_provider());
 
     // Register server
     adapter.register_server(

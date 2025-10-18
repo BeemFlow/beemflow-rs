@@ -24,7 +24,7 @@ steps:
   - id: generate_message
     use: core.echo
     with:
-      text: "The time is {{ env.USER }}'s time"
+      text: "The time is {{ secrets.USER }}'s time"
   
   - id: summary
     use: core.echo

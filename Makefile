@@ -70,33 +70,35 @@ e2e:
 	echo "Using isolated test directory: $$test_dir"; \
 	echo ""; \
 	failed=0; \
-	for flow in $(E2E_FLOWS) $(INTEGRATION_FLOWS); do \
+	for flow in $(INTEGRATION_FLOWS) $(E2E_FLOWS); do \
 		flow_name=$$(basename $$flow .flow.yaml); \
+		echo "══════════════════════════════════════════════════════════════"; \
 		echo "Running $$flow"; \
-		save_output=$$($(RELEASE_BINARY) flows save $$flow_name --file "$$flow" 2>&1); \
-		save_status=$$?; \
-		if [ $$save_status -ne 0 ]; then \
-			echo "  ❌ Save failed"; \
-			echo "$$save_output" | head -5; \
+		echo ""; \
+		if ! $(RELEASE_BINARY) flows save $$flow_name --file "$$flow"; then \
+			echo ""; \
+			echo "  ❌ Save failed for $$flow_name"; \
 			failed=$$((failed + 1)); \
 			continue; \
 		fi; \
-		output=$$($(RELEASE_BINARY) runs start $$flow_name --draft 2>&1); \
-		if echo "$$output" | grep -q "completed"; then \
-			echo "  ✓ Passed"; \
+		echo ""; \
+		echo "Executing flow:"; \
+		if $(RELEASE_BINARY) runs start $$flow_name --draft; then \
+			echo ""; \
+			echo "  ✓ $$flow_name passed"; \
 		else \
-			echo "  ❌ Failed"; \
-			echo "$$output" | grep -E "Error:" | head -3; \
+			echo ""; \
+			echo "  ❌ $$flow_name failed"; \
 			failed=$$((failed + 1)); \
 		fi; \
+		echo ""; \
 	done; \
 	rm -rf "$$test_dir"; \
+	echo "══════════════════════════════════════════════════════════════"; \
 	if [ $$failed -gt 0 ]; then \
-		echo ""; \
 		echo "❌ E2E tests failed: $$failed flow(s) failed"; \
 		exit 1; \
 	fi; \
-	echo ""; \
 	echo "✅ All E2E tests passed!"
 
 # Full test suite (unit + integration + e2e CLI tests)
