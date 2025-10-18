@@ -51,7 +51,6 @@ pub mod adapter;
 pub mod cli;
 pub mod dsl;
 pub mod engine;
-pub mod graph;
 
 // Infrastructure
 pub mod blob;

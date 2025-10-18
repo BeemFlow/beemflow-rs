@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::dsl::{Validator, parse_file, parse_string};
-use crate::graph::GraphGenerator;
 use beemflow_core_macros::{operation, operation_group};
 use schemars::JsonSchema;
 
@@ -165,22 +164,6 @@ pub mod flows {
         #[serde(default)]
         #[schemars(description = "Path to flow file (CLI only)")]
         pub file: Option<String>,
-    }
-
-    #[derive(Deserialize, JsonSchema)]
-    #[schemars(description = "Input for generating a Mermaid diagram")]
-    pub struct GraphInput {
-        #[schemars(description = "Name of the flow to load from storage")]
-        pub name: String,
-        /// Path to flow file (CLI only)
-        #[serde(default)]
-        #[schemars(description = "Path to flow file (CLI only)")]
-        pub file: Option<String>,
-    }
-
-    #[derive(Serialize)]
-    pub struct GraphOutput {
-        pub diagram: String,
     }
 
     #[derive(Deserialize, JsonSchema)]
@@ -665,36 +648,6 @@ pub mod flows {
                 "status": "valid",
                 "message": "Validation OK: flow is valid!"
             }))
-        }
-    }
-
-    /// Generate Mermaid diagram
-    #[operation(
-        name = "graph_flow",
-        input = GraphInput,
-        http = "POST /flows/graph",
-        cli = "flows graph <FILE> [--output <PATH>]",
-        description = "Generate Mermaid diagram for a flow"
-    )]
-    pub struct Graph {
-        pub deps: Arc<Dependencies>,
-    }
-
-    #[async_trait]
-    impl Operation for Graph {
-        type Input = GraphInput;
-        type Output = GraphOutput;
-
-        async fn execute(&self, input: Self::Input) -> Result<Self::Output> {
-            let flow = super::load_flow_from_config(
-                &self.deps.config,
-                Some(&input.name),
-                input.file.as_deref(),
-            )
-            .await?;
-            let diagram = GraphGenerator::generate(&flow)?;
-
-            Ok(GraphOutput { diagram })
         }
     }
 

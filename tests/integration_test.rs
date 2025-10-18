@@ -245,62 +245,6 @@ async fn test_storage_operations() {
     assert_eq!(retrieved_run.unwrap().flow_name.as_str(), "test");
 }
 
-#[test]
-fn test_graph_generation() {
-    use beemflow::graph::GraphGenerator;
-    use beemflow::model::*;
-
-    let flow = Flow {
-        name: "test".to_string().into(),
-        description: None,
-        version: None,
-        on: Some(Trigger::Single("cli.manual".to_string())),
-        cron: None,
-        vars: None,
-        steps: vec![
-            Step {
-                id: "step1".to_string().into(),
-                use_: Some("core.echo".to_string()),
-                with: None,
-                depends_on: None,
-                parallel: None,
-                if_: None,
-                foreach: None,
-                as_: None,
-                do_: None,
-                steps: None,
-                retry: None,
-                await_event: None,
-                wait: None,
-            },
-            Step {
-                id: "step2".to_string().into(),
-                use_: Some("core.echo".to_string()),
-                with: None,
-                depends_on: None,
-                parallel: None,
-                if_: None,
-                foreach: None,
-                as_: None,
-                do_: None,
-                steps: None,
-                retry: None,
-                await_event: None,
-                wait: None,
-            },
-        ],
-        catch: None,
-        mcp_servers: None,
-    };
-
-    let diagram = GraphGenerator::generate(&flow).unwrap();
-    assert!(diagram.contains("graph TD"));
-    assert!(diagram.contains("step1"));
-    assert!(diagram.contains("step2"));
-    assert!(diagram.contains("Start"));
-    assert!(diagram.contains("End"));
-}
-
 // ============================================================================
 // CLI and Server Integration Tests
 // ============================================================================
