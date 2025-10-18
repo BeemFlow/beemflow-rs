@@ -393,7 +393,9 @@ impl HttpAdapter {
                         if default_str.starts_with("$env:") {
                             let var_name = default_str.trim_start_matches("$env:");
                             // Use secrets provider for consistent secret access
-                            if let Ok(Some(secret_val)) = secrets_provider.get_secret(var_name).await {
+                            if let Ok(Some(secret_val)) =
+                                secrets_provider.get_secret(var_name).await
+                            {
                                 inputs.insert(key.clone(), Value::String(secret_val));
                             }
                             // If secret not found, don't insert default (parameter remains unset)

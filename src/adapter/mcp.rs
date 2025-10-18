@@ -72,7 +72,6 @@ impl McpAdapter {
     }
 }
 
-
 #[async_trait]
 impl Adapter for McpAdapter {
     fn id(&self) -> &str {

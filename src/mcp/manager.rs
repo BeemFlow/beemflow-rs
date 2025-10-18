@@ -137,7 +137,8 @@ impl McpManager {
                 ))
             })?;
 
-        let server = Arc::new(McpServer::start(server_name, &config, &self.secrets_provider).await?);
+        let server =
+            Arc::new(McpServer::start(server_name, &config, &self.secrets_provider).await?);
         self.servers
             .write()
             .insert(server_name.to_string(), server.clone());

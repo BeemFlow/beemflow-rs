@@ -7,7 +7,6 @@ use crate::storage::SqliteStorage;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-
 /// Test environment with isolated temporary directories (test builds only)
 ///
 /// This struct provides a complete, isolated test environment that mirrors production:
@@ -130,5 +129,4 @@ mod tests {
 
         assert_eq!(content, Some("content".to_string()));
     }
-
 }
