@@ -52,6 +52,11 @@ pub struct Engine {
 
 impl Engine {
     /// Create a new engine with all dependencies
+    ///
+    /// This is the internal constructor used by `core::create_dependencies()`.
+    /// For production use, call `create_dependencies()` instead.
+    /// For tests, use `Engine::for_testing()` or `TestEnvironment`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         adapters: Arc<AdapterRegistry>,
         mcp_adapter: Arc<crate::adapter::McpAdapter>,
