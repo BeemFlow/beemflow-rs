@@ -32,7 +32,8 @@ async fn setup_executor() -> Executor {
             .expect("Failed to create SQLite storage"),
     );
 
-    let oauth_client = crate::auth::create_test_oauth_client(storage.clone(), secrets_provider.clone());
+    let oauth_client =
+        crate::auth::create_test_oauth_client(storage.clone(), secrets_provider.clone());
 
     Executor::new(
         adapters,

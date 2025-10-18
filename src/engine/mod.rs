@@ -729,10 +729,8 @@ impl Engine {
         let storage_arc = Arc::new(storage);
 
         // Create OAuth client manager with test redirect URI
-        let oauth_client = crate::auth::create_test_oauth_client(
-            storage_arc.clone(),
-            secrets_provider.clone(),
-        );
+        let oauth_client =
+            crate::auth::create_test_oauth_client(storage_arc.clone(), secrets_provider.clone());
 
         Self::new(
             adapters,

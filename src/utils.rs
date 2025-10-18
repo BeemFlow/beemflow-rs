@@ -129,7 +129,8 @@ impl TestEnvironment {
         ));
 
         // Create OAuth client manager with test redirect URI
-        let oauth_client = crate::auth::create_test_oauth_client(storage.clone(), secrets_provider.clone());
+        let oauth_client =
+            crate::auth::create_test_oauth_client(storage.clone(), secrets_provider.clone());
 
         // Create engine with test environment config and storage
         let engine = Arc::new(crate::engine::Engine::new(
