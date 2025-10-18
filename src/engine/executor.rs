@@ -18,14 +18,23 @@ use uuid::Uuid;
 // Helper Functions (used by both main executor and parallel tasks)
 // ============================================================================
 
-/// Resolve adapter for a tool name
-fn resolve_adapter(adapters: &Arc<AdapterRegistry>, tool_name: &str) -> Result<Arc<dyn Adapter>> {
-    // Try exact match first
+/// Resolve adapter for a tool name, with lazy loading support
+///
+/// This function resolves adapters in the following priority:
+/// 1. Exact match (e.g., registered adapters)
+/// 2. Prefix match for core.* and mcp:// tools
+/// 3. Lazy load from registry (for dynamically installed tools)
+/// 4. Fallback to generic HTTP adapter (legacy behavior)
+async fn resolve_adapter(
+    adapters: &Arc<AdapterRegistry>,
+    tool_name: &str,
+) -> Result<Arc<dyn Adapter>> {
+    // Try exact match first (already registered adapters)
     if let Some(adapter) = adapters.get(tool_name) {
         return Ok(adapter);
     }
 
-    // Try by prefix
+    // Try by prefix for core.* and mcp://* tools
     if tool_name.starts_with(crate::constants::ADAPTER_PREFIX_MCP) {
         if let Some(adapter) = adapters.get(crate::constants::ADAPTER_ID_MCP) {
             return Ok(adapter);
@@ -40,7 +49,12 @@ fn resolve_adapter(adapters: &Arc<AdapterRegistry>, tool_name: &str) -> Result<A
         return Err(BeemFlowError::adapter("Core adapter not registered"));
     }
 
-    // Fallback to HTTP adapter for registry tools
+    // Try lazy loading from registry (for dynamically installed tools)
+    if let Some(adapter) = adapters.get_or_load(tool_name).await {
+        return Ok(adapter);
+    }
+
+    // Fallback to generic HTTP adapter (legacy behavior for backward compatibility)
     if let Some(adapter) = adapters.get(crate::constants::HTTP_ADAPTER_ID) {
         return Ok(adapter);
     }
@@ -307,7 +321,7 @@ impl Executor {
 
                 // Execute tool call directly for parallel steps (no nesting)
                 if let Some(ref use_) = child.use_ {
-                    let adapter = resolve_adapter(&adapters, use_)?;
+                    let adapter = resolve_adapter(&adapters, use_).await?;
                     let mut inputs =
                         prepare_inputs(&templater, &child, &step_ctx_clone, runs_data.as_ref())?;
                     add_special_use_param(&mut inputs, use_);
@@ -494,7 +508,7 @@ impl Executor {
                 // Execute steps - simple tool calls only in parallel foreach
                 for inner_step in &do_steps {
                     if let Some(ref use_) = inner_step.use_ {
-                        let adapter = resolve_adapter(&adapters, use_)?;
+                        let adapter = resolve_adapter(&adapters, use_).await?;
                         let mut inputs =
                             prepare_inputs(&templater, inner_step, &iter_ctx, runs_data.as_ref())?;
                         add_special_use_param(&mut inputs, use_);
@@ -549,7 +563,7 @@ impl Executor {
         step_ctx: &StepContext,
         step_id: &str,
     ) -> Result<()> {
-        let adapter = resolve_adapter(&self.adapters, use_)?;
+        let adapter = resolve_adapter(&self.adapters, use_).await?;
         let mut inputs = prepare_inputs(&self.templater, step, step_ctx, self.runs_data.as_ref())?;
         add_special_use_param(&mut inputs, use_);
 

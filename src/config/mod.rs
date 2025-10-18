@@ -481,16 +481,12 @@ impl Config {
     pub fn create_secrets_provider(&self) -> std::sync::Arc<dyn crate::secrets::SecretsProvider> {
         use std::sync::Arc;
 
-        match self.secrets.as_ref().and_then(|s| s.driver.as_deref()) {
-            // Future: AWS Secrets Manager
-            // Some("aws") => Arc::new(AwsSecretsProvider::new(self.secrets.as_ref())),
-
-            // Future: HashiCorp Vault
-            // Some("vault") => Arc::new(VaultSecretsProvider::new(self.secrets.as_ref())),
-
-            // Default: Environment variables
-            _ => Arc::new(crate::secrets::EnvSecretsProvider::new()),
-        }
+        // Currently only supports environment variable provider
+        // Future support for AWS Secrets Manager and HashiCorp Vault:
+        // - Some("aws") => Arc::new(AwsSecretsProvider::new(self.secrets.as_ref())),
+        // - Some("vault") => Arc::new(VaultSecretsProvider::new(self.secrets.as_ref())),
+        self.secrets.as_ref().and_then(|s| s.driver.as_deref());
+        Arc::new(crate::secrets::EnvSecretsProvider::new())
     }
 
     /// Load configuration from file

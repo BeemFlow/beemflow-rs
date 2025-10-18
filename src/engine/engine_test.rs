@@ -34,9 +34,16 @@ fn test_default_registry_loading() {
 
 #[tokio::test]
 async fn test_adapter_registration() {
-    let adapters = Arc::new(AdapterRegistry::new());
     let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
         Arc::new(crate::secrets::EnvSecretsProvider::new());
+
+    // Create registry manager for testing
+    let registry_manager = Arc::new(crate::registry::RegistryManager::standard(
+        None,
+        secrets_provider.clone(),
+    ));
+
+    let adapters = Arc::new(AdapterRegistry::new(registry_manager));
     let mcp_adapter = Arc::new(crate::adapter::McpAdapter::new(secrets_provider.clone()));
     Engine::load_default_registry_tools(&adapters, &mcp_adapter, &secrets_provider).await;
 
@@ -48,13 +55,23 @@ async fn test_adapter_registration() {
     }
 
     // Check that http.fetch was registered
-    let http_fetch = adapters.get("http.fetch");
+    let http_fetch = adapters.get_or_load("http.fetch").await;
     assert!(http_fetch.is_some(), "http.fetch should be registered");
     println!("\n✓ http.fetch is registered!");
 
     // Check for other common tools
-    assert!(adapters.get("openai.chat_completion").is_some());
-    assert!(adapters.get("google_sheets.values.get").is_some());
+    assert!(
+        adapters
+            .get_or_load("openai.chat_completion")
+            .await
+            .is_some()
+    );
+    assert!(
+        adapters
+            .get_or_load("google_sheets.values.get")
+            .await
+            .is_some()
+    );
     println!("✓ openai.chat_completion is registered!");
     println!("✓ google_sheets.values.get is registered!");
 }

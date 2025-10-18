@@ -134,7 +134,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_env_provider_default() {
-        let provider = EnvSecretsProvider::default();
+        let provider = EnvSecretsProvider::new();
         unsafe {
             std::env::set_var("DEFAULT_TEST", "works");
         }

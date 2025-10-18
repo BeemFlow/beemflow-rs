@@ -633,7 +633,18 @@ impl Engine {
             .await
             .expect("Failed to create in-memory SQLite storage");
 
-        let adapters = Arc::new(AdapterRegistry::new());
+        // Create secrets provider
+        let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
+            Arc::new(crate::secrets::EnvSecretsProvider::new());
+
+        // Create registry manager for testing
+        let registry_manager = Arc::new(crate::registry::RegistryManager::standard(
+            None,
+            secrets_provider.clone(),
+        ));
+
+        // Create adapter registry with lazy loading support
+        let adapters = Arc::new(AdapterRegistry::new(registry_manager));
 
         // Register core adapters
         adapters.register(Arc::new(crate::adapter::CoreAdapter::new()));
@@ -641,10 +652,6 @@ impl Engine {
             crate::constants::HTTP_ADAPTER_ID.to_string(),
             None,
         )));
-
-        // Create secrets provider
-        let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
-            Arc::new(crate::secrets::EnvSecretsProvider::new());
 
         // Create and register MCP adapter
         let mcp_adapter = Arc::new(crate::adapter::McpAdapter::new(secrets_provider.clone()));

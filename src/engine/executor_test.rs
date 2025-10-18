@@ -10,7 +10,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 async fn setup_executor() -> Executor {
-    let adapters = Arc::new(AdapterRegistry::new());
+    // Create secrets provider for testing
+    let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
+        Arc::new(crate::secrets::EnvSecretsProvider::new());
+
+    // Create empty registry for testing
+    let temp_dir = tempfile::tempdir().unwrap();
+    let registry_path = temp_dir.path().join("registry.json");
+    std::fs::write(&registry_path, "[]").unwrap();
+    let local_registry = crate::registry::LocalRegistry::new(registry_path.to_str().unwrap());
+    let registry_manager = Arc::new(crate::registry::RegistryManager::new(
+        vec![Box::new(local_registry)],
+        secrets_provider.clone(),
+    ));
+
+    let adapters = Arc::new(AdapterRegistry::new(registry_manager));
     adapters.register(Arc::new(CoreAdapter::new()));
     let templater = Arc::new(Templater::new());
     let event_bus: Arc<dyn EventBus> = Arc::new(crate::event::InProcEventBus::new());
@@ -19,10 +33,6 @@ async fn setup_executor() -> Executor {
             .await
             .expect("Failed to create SQLite storage"),
     );
-
-    // Create secrets provider for testing
-    let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
-        Arc::new(crate::secrets::EnvSecretsProvider::new());
 
     Executor::new(
         adapters,

@@ -216,26 +216,37 @@ pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
     // Create storage from config
     let storage = crate::storage::create_storage_from_config(&config.storage).await?;
 
-    // Create engine dependencies
-    let adapters = Arc::new(crate::adapter::AdapterRegistry::new());
+    // Create secrets provider from config (needed by multiple components)
+    let secrets_provider = config.create_secrets_provider();
+
+    // Create registry manager with standard sources (needed by adapter registry)
+    let registry_manager = Arc::new(RegistryManager::standard(
+        Some(&config),
+        secrets_provider.clone(),
+    ));
+
+    // Create adapter registry with lazy loading support
+    let adapters = Arc::new(crate::adapter::AdapterRegistry::new(
+        registry_manager.clone(),
+    ));
+
+    // Create remaining engine dependencies
     let templater = Arc::new(crate::dsl::Templater::new());
     let event_bus: Arc<dyn EventBus> = Arc::new(crate::event::InProcEventBus::new());
 
-    // Register core adapters
+    // Register core adapters (built-in, not from registry)
     adapters.register(Arc::new(crate::adapter::CoreAdapter::new()));
     adapters.register(Arc::new(crate::adapter::HttpAdapter::new(
         crate::constants::HTTP_ADAPTER_ID.to_string(),
-        None,
+        None, // Generic HTTP adapter for fallback
     )));
-
-    // Create secrets provider from config
-    let secrets_provider = config.create_secrets_provider();
 
     // Create and register MCP adapter
     let mcp_adapter = Arc::new(crate::adapter::McpAdapter::new(secrets_provider.clone()));
     adapters.register(mcp_adapter.clone());
 
-    // Load tools and MCP servers from default registry
+    // Pre-load default tools and MCP servers for better startup performance
+    // (Tools will also be lazy-loaded on-demand if not pre-loaded)
     Engine::load_default_registry_tools(&adapters, &mcp_adapter, &secrets_provider).await;
 
     // Get limits from config
@@ -251,9 +262,6 @@ pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
         secrets_provider.clone(),
         limits.max_concurrent_tasks,
     ));
-
-    // Create registry manager with standard sources and secrets provider
-    let registry_manager = Arc::new(RegistryManager::standard(Some(&config), secrets_provider));
 
     Ok(Dependencies {
         storage,

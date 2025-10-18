@@ -191,15 +191,24 @@ pub trait Adapter: Send + Sync {
 }
 
 /// Registry of adapters - uses DashMap for lock-free concurrent access
+///
+/// Supports lazy loading of tools from the registry when they are first accessed.
+/// This allows dynamically installed tools to work without restarting the engine.
 pub struct AdapterRegistry {
     adapters: Arc<DashMap<String, Arc<dyn Adapter>>>,
+    registry_manager: Arc<crate::registry::RegistryManager>,
 }
 
 impl AdapterRegistry {
-    /// Create a new adapter registry
-    pub fn new() -> Self {
+    /// Create a new adapter registry with lazy loading support
+    ///
+    /// When a tool is not found in the adapter registry, it will be automatically
+    /// loaded from the registry manager if available. This enables dynamic tool
+    /// installation without restarting the engine.
+    pub fn new(registry_manager: Arc<crate::registry::RegistryManager>) -> Self {
         Self {
             adapters: Arc::new(DashMap::new()),
+            registry_manager,
         }
     }
 
@@ -208,9 +217,61 @@ impl AdapterRegistry {
         self.adapters.insert(adapter.id().to_string(), adapter);
     }
 
-    /// Get an adapter by ID
-    pub fn get(&self, id: &str) -> Option<Arc<dyn Adapter>> {
+    /// Get a registered adapter by ID (synchronous, no lazy loading)
+    ///
+    /// This is used internally for built-in adapters (core, mcp, http) during prefix matching.
+    /// For dynamically installed tools, use `get_or_load()` instead which supports lazy loading.
+    pub(crate) fn get(&self, id: &str) -> Option<Arc<dyn Adapter>> {
         self.adapters.get(id).map(|entry| Arc::clone(&*entry))
+    }
+
+    /// Get an adapter by ID, lazy loading from registry if not found
+    ///
+    /// This method will:
+    /// 1. Check if the adapter is already registered
+    /// 2. If not, query the registry manager for a tool with this name
+    /// 3. Create an HttpAdapter with the tool's manifest and cache it
+    /// 4. Return the adapter for immediate use
+    ///
+    /// This enables dynamic tool installation - tools added via `flow tools install`
+    /// are immediately available without restarting the engine.
+    pub async fn get_or_load(&self, tool_name: &str) -> Option<Arc<dyn Adapter>> {
+        // 1. Check if already registered (exact match)
+        if let Some(entry) = self.adapters.get(tool_name) {
+            return Some(Arc::clone(&*entry));
+        }
+
+        // 2. Try lazy load from registry
+        if let Ok(Some(entry)) = self.registry_manager.get_server(tool_name).await {
+            // Only load if it's actually a tool (not mcp_server, oauth_provider, etc.)
+            if entry.entry_type == "tool" {
+                tracing::debug!("Lazy loading tool '{}' from registry", tool_name);
+
+                // Create tool manifest from registry entry
+                let manifest = ToolManifest {
+                    name: entry.name.clone(),
+                    description: entry.description.clone().unwrap_or_default(),
+                    kind: entry.kind.unwrap_or_else(|| "task".to_string()),
+                    version: entry.version,
+                    parameters: entry.parameters.unwrap_or_default(),
+                    endpoint: entry.endpoint,
+                    method: entry.method,
+                    headers: entry.headers,
+                };
+
+                // Create HTTP adapter with this manifest
+                let adapter = Arc::new(http::HttpAdapter::new(entry.name.clone(), Some(manifest)))
+                    as Arc<dyn Adapter>;
+
+                // Cache for future use
+                self.adapters.insert(tool_name.to_string(), adapter.clone());
+
+                tracing::info!("Loaded tool '{}' from registry", tool_name);
+                return Some(adapter);
+            }
+        }
+
+        None
     }
 
     /// Get all adapters
@@ -222,17 +283,13 @@ impl AdapterRegistry {
     }
 }
 
-impl Default for AdapterRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub use core::CoreAdapter;
 pub use http::HttpAdapter;
 
 pub use mcp::McpAdapter;
 
+#[cfg(test)]
+mod adapter_test;
 #[cfg(test)]
 mod core_test;
 #[cfg(test)]
