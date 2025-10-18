@@ -75,27 +75,72 @@ impl TestEnvironment {
         let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
             Arc::new(crate::secrets::EnvSecretsProvider::new());
 
+        // Create config for test environment
+        let config = Arc::new(Config {
+            flows_dir: Some(beemflow_dir.join("flows").to_str().unwrap().to_string()),
+            blob: Some(BlobConfig {
+                driver: Some("filesystem".to_string()),
+                bucket: None,
+                directory: Some(beemflow_dir.join("files").to_str().unwrap().to_string()),
+            }),
+            ..Default::default()
+        });
+
+        let storage = Arc::new(
+            SqliteStorage::new(beemflow_dir.join(db_name).to_str().unwrap())
+                .await
+                .expect("Failed to create SQLite storage"),
+        );
+
+        // Create registry manager
+        let registry_manager = Arc::new(crate::registry::RegistryManager::standard(
+            None,
+            secrets_provider.clone(),
+        ));
+
+        // Create adapter registry with lazy loading support
+        let adapters = Arc::new(crate::adapter::AdapterRegistry::new(
+            registry_manager.clone(),
+        ));
+
+        // Register core adapters
+        adapters.register(Arc::new(crate::adapter::CoreAdapter::new()));
+        adapters.register(Arc::new(crate::adapter::HttpAdapter::new(
+            crate::constants::HTTP_ADAPTER_ID.to_string(),
+            None,
+        )));
+
+        // Create and register MCP adapter
+        let mcp_adapter = Arc::new(crate::adapter::McpAdapter::new(secrets_provider.clone()));
+        adapters.register(mcp_adapter.clone());
+
+        // Load tools and MCP servers from default registry
+        crate::engine::Engine::load_default_registry_tools(
+            &adapters,
+            &mcp_adapter,
+            &secrets_provider,
+        )
+        .await;
+
+        // Create engine with test environment config and storage
+        let engine = Arc::new(crate::engine::Engine::new(
+            adapters,
+            mcp_adapter,
+            Arc::new(crate::dsl::Templater::new()),
+            storage.clone(),
+            secrets_provider.clone(),
+            config.clone(),
+            1000, // max_concurrent_tasks
+        ));
+
         let deps = crate::core::Dependencies {
-            storage: Arc::new(
-                SqliteStorage::new(beemflow_dir.join(db_name).to_str().unwrap())
-                    .await
-                    .expect("Failed to create SQLite storage"),
-            ),
-            engine: Arc::new(crate::engine::Engine::for_testing().await),
+            storage,
+            engine: engine.clone(),
             registry_manager: Arc::new(crate::registry::RegistryManager::standard(
                 None,
                 secrets_provider.clone(),
             )),
-            event_bus: Arc::new(crate::event::InProcEventBus::new()),
-            config: Arc::new(Config {
-                flows_dir: Some(beemflow_dir.join("flows").to_str().unwrap().to_string()),
-                blob: Some(BlobConfig {
-                    driver: Some("filesystem".to_string()),
-                    bucket: None,
-                    directory: Some(beemflow_dir.join("files").to_str().unwrap().to_string()),
-                }),
-                ..Default::default()
-            }),
+            config,
         };
 
         TestEnvironment {

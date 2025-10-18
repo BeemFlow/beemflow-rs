@@ -297,13 +297,14 @@ async fn test_lazy_load_end_to_end_execution() {
     );
 
     let mcp_adapter = Arc::new(crate::adapter::McpAdapter::new(secrets_provider.clone()));
+    let config = Arc::new(crate::config::Config::default());
     let engine = crate::engine::Engine::new(
         adapters.clone(),
         mcp_adapter,
         Arc::new(crate::dsl::Templater::new()),
-        Arc::new(crate::event::InProcEventBus::new()),
         storage,
         secrets_provider,
+        config,
         1000,
     );
 

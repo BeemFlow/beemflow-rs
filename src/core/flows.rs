@@ -403,23 +403,11 @@ pub mod flows {
             // Get current deployed version
             let current_version = self.deps.storage.get_deployed_version(&input.name).await?;
 
-            // Get the target version content
-            let content = self
-                .deps
-                .storage
-                .get_flow_version_content(&input.name, &input.version)
-                .await?
-                .ok_or_else(|| {
-                    not_found(
-                        &format!("Version {}", input.version),
-                        "(must be previously deployed)",
-                    )
-                })?;
-
-            // Deploy the target version
+            // Update deployed version pointer
+            // Database foreign key constraint ensures version exists in flow_versions table
             self.deps
                 .storage
-                .deploy_flow_version(&input.name, &input.version, &content)
+                .set_deployed_version(&input.name, &input.version)
                 .await?;
 
             let message = format!("Flow '{}' rolled back to v{}", input.name, input.version);

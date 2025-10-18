@@ -218,7 +218,6 @@ impl McpServer {
             crate::core::runs::runs::register_mcp_tools,
             crate::core::tools::tools::register_mcp_tools,
             crate::core::mcp::mcp::register_mcp_tools,
-            crate::core::events::events::register_mcp_tools,
             crate::core::system::system::register_mcp_tools,
         ]
         .into_iter()

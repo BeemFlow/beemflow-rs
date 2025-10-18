@@ -15,13 +15,14 @@ CREATE TABLE IF NOT EXISTS runs (
 -- Steps table (step execution tracking)
 CREATE TABLE IF NOT EXISTS steps (
     id TEXT PRIMARY KEY,
-    run_id TEXT,
+    run_id TEXT NOT NULL,
     step_name TEXT,
     status TEXT,
     started_at BIGINT,
     ended_at BIGINT,
     outputs TEXT,
-    error TEXT
+    error TEXT,
+    FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
 );
 
 -- Waits table (timeout/wait tracking)
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS waits (
 -- Paused runs table (await_event support)
 CREATE TABLE IF NOT EXISTS paused_runs (
     token TEXT PRIMARY KEY,
+    source TEXT,
     data TEXT
 );
 
@@ -57,8 +59,22 @@ CREATE TABLE IF NOT EXISTS flow_versions (
 CREATE TABLE IF NOT EXISTS deployed_flows (
     flow_name TEXT PRIMARY KEY,
     deployed_version TEXT NOT NULL,
-    deployed_at BIGINT NOT NULL
+    deployed_at BIGINT NOT NULL,
+    FOREIGN KEY (flow_name, deployed_version) REFERENCES flow_versions(flow_name, version) ON DELETE CASCADE
 );
+
+-- Flow triggers table (indexes which flows listen to which topics for O(1) webhook routing)
+CREATE TABLE IF NOT EXISTS flow_triggers (
+    flow_name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    PRIMARY KEY (flow_name, version, topic),
+    FOREIGN KEY (flow_name, version) REFERENCES flow_versions(flow_name, version) ON DELETE CASCADE
+);
+
+-- Performance indexes
+-- Index for topic-based webhook routing (critical for scalability with 1000+ flows)
+CREATE INDEX IF NOT EXISTS idx_flow_triggers_topic ON flow_triggers(topic);
 
 -- Index for version queries
 CREATE INDEX IF NOT EXISTS idx_flow_versions_name ON flow_versions(flow_name, deployed_at DESC);
@@ -134,3 +150,6 @@ CREATE INDEX IF NOT EXISTS idx_steps_run_id ON steps(run_id);
 
 -- Index for general time-based queries (list_runs with ORDER BY)
 CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at DESC);
+
+-- Index for webhook queries by source (optimizes find_paused_runs_by_source)
+CREATE INDEX IF NOT EXISTS idx_paused_runs_source ON paused_runs(source) WHERE source IS NOT NULL;

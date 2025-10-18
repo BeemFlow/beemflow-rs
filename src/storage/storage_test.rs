@@ -100,7 +100,7 @@ async fn test_all_storage_operations<S: Storage>(storage: Arc<S>) {
     });
 
     storage
-        .save_paused_run("pause_token", paused_data.clone())
+        .save_paused_run("pause_token", "webhook.test_source", paused_data.clone())
         .await
         .expect("SavePausedRun should succeed");
 
@@ -265,6 +265,51 @@ async fn test_flow_versioning_operations<S: Storage>(storage: Arc<S>) {
         Some("1.0.0".to_string()),
         "Deployed should now be v1"
     );
+
+    // Test list_all_deployed_flows (efficient JOIN query for webhooks)
+    storage
+        .deploy_flow_version("another_flow", "1.0.0", "another content")
+        .await
+        .expect("Deploy another_flow should succeed");
+
+    // Now we have 2 flows deployed: my_flow@1.0.0 and another_flow@1.0.0
+    let all_deployed = storage
+        .list_all_deployed_flows()
+        .await
+        .expect("ListAllDeployedFlows should succeed");
+
+    assert_eq!(all_deployed.len(), 2, "Should have 2 deployed flows");
+
+    // Verify contents are correct
+    let my_flow_entry = all_deployed.iter().find(|(name, _)| name == "my_flow");
+    assert!(my_flow_entry.is_some(), "Should find my_flow");
+    assert_eq!(
+        my_flow_entry.unwrap().1,
+        "content v1",
+        "Should have v1 content"
+    );
+
+    let another_flow_entry = all_deployed.iter().find(|(name, _)| name == "another_flow");
+    assert!(another_flow_entry.is_some(), "Should find another_flow");
+    assert_eq!(another_flow_entry.unwrap().1, "another content");
+
+    // Disable my_flow
+    storage
+        .unset_deployed_version("my_flow")
+        .await
+        .expect("UnsetDeployedVersion should succeed");
+
+    let all_deployed_after = storage
+        .list_all_deployed_flows()
+        .await
+        .expect("ListAllDeployedFlows should succeed");
+
+    assert_eq!(
+        all_deployed_after.len(),
+        1,
+        "Should have 1 deployed flow after disable"
+    );
+    assert_eq!(all_deployed_after[0].0, "another_flow");
 }
 
 // Note: Flow CRUD operations (save/get/list/delete) are now handled by pure functions
@@ -482,4 +527,233 @@ async fn test_sqlite_storage_delete_nonexistent() {
         .delete_oauth_credential("nonexistent")
         .await
         .expect("Delete non-existent cred should not error");
+}
+
+// ============================================================================
+// Webhook Architecture Tests: source-based paused run queries
+// ============================================================================
+
+#[tokio::test]
+async fn test_find_paused_runs_by_source() {
+    let storage = SqliteStorage::new(":memory:")
+        .await
+        .expect("Failed to create storage");
+
+    // Save paused runs with different sources
+    storage
+        .save_paused_run(
+            "token1",
+            "webhook.airtable",
+            serde_json::json!({"flow": "approval_flow", "step": 0}),
+        )
+        .await
+        .expect("Failed to save paused run 1");
+
+    storage
+        .save_paused_run(
+            "token2",
+            "webhook.airtable",
+            serde_json::json!({"flow": "approval_flow", "step": 1}),
+        )
+        .await
+        .expect("Failed to save paused run 2");
+
+    storage
+        .save_paused_run(
+            "token3",
+            "webhook.github",
+            serde_json::json!({"flow": "ci_flow", "step": 0}),
+        )
+        .await
+        .expect("Failed to save paused run 3");
+
+    // Query by source
+    let airtable_runs = storage
+        .find_paused_runs_by_source("webhook.airtable")
+        .await
+        .expect("Failed to query by source");
+
+    assert_eq!(airtable_runs.len(), 2, "Should find 2 airtable runs");
+
+    // Verify tokens
+    let tokens: Vec<String> = airtable_runs.iter().map(|(t, _)| t.clone()).collect();
+    assert!(tokens.contains(&"token1".to_string()));
+    assert!(tokens.contains(&"token2".to_string()));
+    assert!(!tokens.contains(&"token3".to_string()));
+
+    // Query by different source
+    let github_runs = storage
+        .find_paused_runs_by_source("webhook.github")
+        .await
+        .expect("Failed to query by source");
+
+    assert_eq!(github_runs.len(), 1, "Should find 1 github run");
+    assert_eq!(github_runs[0].0, "token3");
+
+    // Query non-existent source
+    let empty_runs = storage
+        .find_paused_runs_by_source("webhook.nonexistent")
+        .await
+        .expect("Failed to query by source");
+
+    assert_eq!(
+        empty_runs.len(),
+        0,
+        "Should find 0 runs for nonexistent source"
+    );
+}
+
+#[tokio::test]
+async fn test_source_persists_after_save() {
+    let storage = SqliteStorage::new(":memory:")
+        .await
+        .expect("Failed to create storage");
+
+    let test_data = serde_json::json!({"test": "data"});
+
+    // Save with source
+    storage
+        .save_paused_run("test_token", "webhook.test", test_data.clone())
+        .await
+        .expect("Failed to save");
+
+    // Query by source
+    let runs = storage
+        .find_paused_runs_by_source("webhook.test")
+        .await
+        .expect("Failed to query");
+
+    assert_eq!(runs.len(), 1, "Should find the run");
+    assert_eq!(runs[0].0, "test_token");
+    assert_eq!(runs[0].1, test_data);
+}
+
+#[tokio::test]
+async fn test_fetch_and_delete_removes_from_source_query() {
+    let storage = SqliteStorage::new(":memory:")
+        .await
+        .expect("Failed to create storage");
+
+    // Save a paused run
+    storage
+        .save_paused_run("token1", "webhook.test", serde_json::json!({"data": 1}))
+        .await
+        .expect("Failed to save");
+
+    // Verify it's queryable by source
+    let runs_before = storage
+        .find_paused_runs_by_source("webhook.test")
+        .await
+        .expect("Failed to query");
+    assert_eq!(runs_before.len(), 1);
+
+    // Fetch and delete
+    let fetched = storage
+        .fetch_and_delete_paused_run("token1")
+        .await
+        .expect("Failed to fetch and delete");
+    assert!(fetched.is_some());
+
+    // Verify it's no longer queryable by source
+    let runs_after = storage
+        .find_paused_runs_by_source("webhook.test")
+        .await
+        .expect("Failed to query");
+    assert_eq!(runs_after.len(), 0, "Should be deleted");
+}
+
+#[tokio::test]
+async fn test_update_source_for_existing_token() {
+    let storage = SqliteStorage::new(":memory:")
+        .await
+        .expect("Failed to create storage");
+
+    // Save with initial source
+    storage
+        .save_paused_run("token1", "webhook.old", serde_json::json!({"data": 1}))
+        .await
+        .expect("Failed to save");
+
+    // Update with new source (same token)
+    storage
+        .save_paused_run("token1", "webhook.new", serde_json::json!({"data": 2}))
+        .await
+        .expect("Failed to update");
+
+    // Old source should have no results
+    let old_runs = storage
+        .find_paused_runs_by_source("webhook.old")
+        .await
+        .expect("Failed to query");
+    assert_eq!(old_runs.len(), 0);
+
+    // New source should have the run
+    let new_runs = storage
+        .find_paused_runs_by_source("webhook.new")
+        .await
+        .expect("Failed to query");
+    assert_eq!(new_runs.len(), 1);
+    assert_eq!(new_runs[0].1.get("data").unwrap(), &serde_json::json!(2));
+}
+
+#[tokio::test]
+async fn test_multiple_sources_isolation() {
+    let storage = SqliteStorage::new(":memory:")
+        .await
+        .expect("Failed to create storage");
+
+    // Create runs across multiple sources
+    for i in 1..=3 {
+        storage
+            .save_paused_run(
+                &format!("airtable_{}", i),
+                "webhook.airtable",
+                serde_json::json!({"index": i}),
+            )
+            .await
+            .expect("Failed to save");
+    }
+
+    for i in 1..=2 {
+        storage
+            .save_paused_run(
+                &format!("github_{}", i),
+                "webhook.github",
+                serde_json::json!({"index": i}),
+            )
+            .await
+            .expect("Failed to save");
+    }
+
+    // Verify isolation
+    let airtable = storage
+        .find_paused_runs_by_source("webhook.airtable")
+        .await
+        .expect("Query failed");
+    assert_eq!(airtable.len(), 3);
+
+    let github = storage
+        .find_paused_runs_by_source("webhook.github")
+        .await
+        .expect("Query failed");
+    assert_eq!(github.len(), 2);
+
+    // Delete one from airtable
+    storage
+        .delete_paused_run("airtable_1")
+        .await
+        .expect("Delete failed");
+
+    // Verify airtable count decreased but github unchanged
+    let airtable_after = storage
+        .find_paused_runs_by_source("webhook.airtable")
+        .await
+        .expect("Query failed");
+    assert_eq!(airtable_after.len(), 2);
+
+    let github_after = storage
+        .find_paused_runs_by_source("webhook.github")
+        .await
+        .expect("Query failed");
+    assert_eq!(github_after.len(), 2);
 }

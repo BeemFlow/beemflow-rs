@@ -82,7 +82,11 @@ async fn test_all_operations_comprehensive() {
     });
 
     storage
-        .save_paused_run("sqlite_pause_token", paused_data.clone())
+        .save_paused_run(
+            "sqlite_pause_token",
+            "webhook.test_source",
+            paused_data.clone(),
+        )
         .await
         .unwrap();
 
@@ -241,11 +245,11 @@ async fn test_paused_runs_roundtrip() {
     let data2 = serde_json::json!({"step": "step2", "value": 100});
 
     storage
-        .save_paused_run("token1", data1.clone())
+        .save_paused_run("token1", "webhook.source1", data1.clone())
         .await
         .unwrap();
     storage
-        .save_paused_run("token2", data2.clone())
+        .save_paused_run("token2", "webhook.source2", data2.clone())
         .await
         .unwrap();
 

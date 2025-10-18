@@ -434,7 +434,7 @@ pub struct LimitsConfig {
 }
 
 fn default_max_concurrent_tasks() -> usize {
-    1000
+    100000
 }
 
 fn default_max_flow_file_size() -> u64 {

@@ -5,7 +5,6 @@
 use super::{PausedRun, StepContext};
 use crate::adapter::{Adapter, AdapterRegistry};
 use crate::dsl::{DependencyAnalyzer, Templater};
-use crate::event::EventBus;
 use crate::storage::Storage;
 use crate::{BeemFlowError, Flow, Result, Step};
 use serde_json::Value;
@@ -142,7 +141,6 @@ fn create_loop_vars(
 pub struct Executor {
     adapters: Arc<AdapterRegistry>,
     templater: Arc<Templater>,
-    event_bus: Arc<dyn EventBus>,
     storage: Arc<dyn Storage>,
     secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
     runs_data: Option<HashMap<String, Value>>,
@@ -154,7 +152,6 @@ impl Executor {
     pub fn new(
         adapters: Arc<AdapterRegistry>,
         templater: Arc<Templater>,
-        event_bus: Arc<dyn EventBus>,
         storage: Arc<dyn Storage>,
         secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
         runs_data: Option<HashMap<String, Value>>,
@@ -163,7 +160,6 @@ impl Executor {
         Self {
             adapters,
             templater,
-            event_bus,
             storage,
             secrets_provider,
             runs_data,
@@ -653,6 +649,9 @@ impl Executor {
     }
 
     /// Handle await_event step
+    ///
+    /// Pauses execution and stores state in database.
+    /// Webhooks will later query for paused runs by source and resume them.
     async fn handle_await_event(
         &self,
         step: &Step,
@@ -685,67 +684,14 @@ impl Executor {
             ));
         }
 
-        // Set up event subscription with proper event matching (returns subscription ID)
-        let token_owned = token.to_string();
-        let match_criteria = await_spec.match_.clone();
-        let event_bus_ref = self.event_bus.clone();
-
-        let subscription_id = self
-            .event_bus
-            .subscribe(
-                &await_spec.source,
-                Arc::new(move |payload| {
-                    // Check if this event matches our criteria
-                    if Self::matches_event_criteria(&payload, &match_criteria) {
-                        tracing::info!("Resume event matched for token: {}", token_owned);
-
-                        // Trigger resume by publishing to the resume topic
-                        let resume_topic = format!(
-                            "{}{}",
-                            crate::constants::EVENT_TOPIC_RESUME_PREFIX,
-                            token_owned
-                        );
-                        let event_bus_clone = event_bus_ref.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = event_bus_clone.publish(&resume_topic, payload).await {
-                                tracing::error!("Failed to publish resume event: {}", e);
-                            }
-                        });
-                    }
-                }),
-            )
-            .await?;
-
-        tracing::debug!(
-            "Created subscription {} for await_event token: {} on topic: {}",
-            subscription_id,
-            token,
+        tracing::info!(
+            "Pausing run {} at step '{}', waiting for event from source: {}",
+            run_id,
+            step.id,
             await_spec.source
         );
 
-        // Handle timeout if specified
-        if let Some(ref timeout) = await_spec.timeout {
-            let timeout_duration = self.parse_timeout(timeout)?;
-            let timeout_token = token.to_string();
-            let timeout_sub_id = subscription_id;
-            let event_bus_timeout = self.event_bus.clone();
-
-            tokio::spawn(async move {
-                tokio::time::sleep(timeout_duration).await;
-                tracing::warn!(
-                    "Timeout reached for await_event token: {}, cleaning up subscription {}",
-                    timeout_token,
-                    timeout_sub_id
-                );
-
-                // Clean up subscription on timeout
-                if let Err(e) = event_bus_timeout.unsubscribe_by_id(timeout_sub_id).await {
-                    tracing::error!("Failed to cleanup subscription on timeout: {}", e);
-                }
-            });
-        }
-
-        // Create paused run with subscription ID for cleanup on resume
+        // Create paused run
         let paused = PausedRun {
             flow: flow.clone(),
             step_idx,
@@ -753,58 +699,18 @@ impl Executor {
             outputs: step_ctx.snapshot().outputs,
             token: token.to_string(),
             run_id,
-            subscription_id, // Store for cleanup when resumed
         };
 
-        // Store paused run in storage (no in-memory cache)
+        // Store paused run in storage with source metadata for webhook queries
         let paused_value = serde_json::to_value(&paused)?;
-        self.storage.save_paused_run(token, paused_value).await?;
+        self.storage
+            .save_paused_run(token, &await_spec.source, paused_value)
+            .await?;
 
         Err(BeemFlowError::AwaitEventPause(format!(
-            "step '{}' is waiting for event",
-            step.id
+            "step '{}' is waiting for event from source '{}'",
+            step.id, await_spec.source
         )))
-    }
-
-    /// Check if an event payload matches the specified criteria
-    fn matches_event_criteria(
-        payload: &serde_json::Value,
-        criteria: &HashMap<String, serde_json::Value>,
-    ) -> bool {
-        criteria
-            .iter()
-            .filter(|(key, _)| *key != crate::constants::MATCH_KEY_TOKEN)
-            .all(|(key, expected)| payload.get(key) == Some(expected))
-    }
-
-    /// Parse timeout string into Duration
-    fn parse_timeout(&self, timeout: &str) -> Result<std::time::Duration> {
-        // Simple timeout parsing - supports formats like "30s", "5m", "1h"
-        let timeout_str = timeout.trim();
-
-        let (value_str, multiplier) = if let Some(s) = timeout_str.strip_suffix('s') {
-            (s, 1)
-        } else if let Some(m) = timeout_str.strip_suffix('m') {
-            (m, 60)
-        } else if let Some(h) = timeout_str.strip_suffix('h') {
-            (h, 3600)
-        } else {
-            return Err(BeemFlowError::validation(format!(
-                "Unsupported timeout format: {}. Use '30s', '5m', or '1h'",
-                timeout
-            )));
-        };
-
-        let value = value_str.parse::<u64>().map_err(|_| {
-            BeemFlowError::validation(format!("Invalid timeout format: {}", timeout))
-        })?;
-
-        // Calculate total seconds with overflow check
-        let total_secs = value
-            .checked_mul(multiplier)
-            .ok_or_else(|| BeemFlowError::validation("Timeout value too large (overflow)"))?;
-
-        Ok(std::time::Duration::from_secs(total_secs))
     }
 
     /// Evaluate a conditional expression

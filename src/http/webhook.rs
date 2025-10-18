@@ -3,8 +3,9 @@
 //! Handles dynamic webhook registration, signature verification, and event parsing.
 
 use crate::Result;
-use crate::event::EventBus;
+use crate::engine::{Engine, PausedRun};
 use crate::registry::{RegistryManager, WebhookConfig};
+use crate::storage::Storage;
 use axum::{
     Router,
     body::Bytes,
@@ -25,86 +26,39 @@ type HmacSha256 = Hmac<Sha256>;
 /// Webhook manager state
 #[derive(Clone)]
 pub struct WebhookManagerState {
-    pub event_bus: Arc<dyn EventBus>,
     pub registry_manager: Arc<RegistryManager>,
     pub secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
+    pub storage: Arc<dyn Storage>,
+    pub engine: Arc<Engine>,
+    pub config: Arc<crate::config::Config>,
 }
 
 /// Parsed webhook event
 #[derive(Debug)]
-struct ParsedEvent {
-    topic: String,
-    data: HashMap<String, Value>,
+pub(crate) struct ParsedEvent {
+    pub(crate) topic: String,
+    pub(crate) data: HashMap<String, Value>,
 }
 
 /// Create webhook routes
 pub fn create_webhook_routes() -> Router<WebhookManagerState> {
-    Router::new()
-        .route("/cron", post(handle_cron_webhook))
-        .route("/{provider}/{*path}", post(handle_webhook))
-}
-
-/// Handle cron webhook notifications
-async fn handle_cron_webhook(
-    State(state): State<WebhookManagerState>,
-    axum::extract::Json(payload): axum::extract::Json<Value>,
-) -> impl IntoResponse {
-    // Log the webhook notification
-    tracing::info!("Received cron webhook: {:?}", payload);
-
-    // Extract notification details
-    if let (Some(event), Some(flow_name), Some(success)) = (
-        payload.get("event").and_then(|v| v.as_str()),
-        payload.get("flow_name").and_then(|v| v.as_str()),
-        payload.get("success").and_then(|v| v.as_bool()),
-    ) {
-        tracing::info!(
-            "Cron event: {} for flow '{}', success={}",
-            event,
-            flow_name,
-            success
-        );
-
-        // Publish event to event bus
-        if let Err(e) = state
-            .event_bus
-            .publish(&format!("cron.{}", event), payload.clone())
-            .await
-        {
-            tracing::error!("Failed to publish cron event: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(
-                    serde_json::json!({"status": "error", "message": "Failed to publish event"}),
-                ),
-            )
-                .into_response();
-        }
-    }
-
-    // Return success response
-    (
-        StatusCode::OK,
-        axum::Json(serde_json::json!({"status": "received"})),
-    )
-        .into_response()
+    Router::new().route("/{provider}", post(handle_webhook))
 }
 
 /// Handle incoming webhook
 async fn handle_webhook(
     State(state): State<WebhookManagerState>,
-    Path((provider, path)): Path<(String, String)>,
+    Path(provider): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    tracing::debug!("Webhook received: provider={}, path={}", provider, path);
+    tracing::debug!("Webhook received: provider={}", provider);
 
     // Find webhook configuration from registry
-    let webhook_config = match find_webhook_config(&state.registry_manager, &provider, &path).await
-    {
+    let webhook_config = match find_webhook_config(&state.registry_manager, &provider).await {
         Some(config) => config,
         None => {
-            tracing::warn!("Webhook not found: {}/{}", provider, path);
+            tracing::warn!("Webhook not found: {}", provider);
             return (StatusCode::NOT_FOUND, "Webhook not configured").into_response();
         }
     };
@@ -124,7 +78,7 @@ async fn handle_webhook(
         if !secret_value.is_empty()
             && !verify_webhook_signature(&webhook_config, &headers, &body, &secret_value)
         {
-            tracing::error!("Invalid webhook signature for {}/{}", provider, path);
+            tracing::error!("Invalid webhook signature for {}", provider);
             return (StatusCode::UNAUTHORIZED, "Invalid signature").into_response();
         }
     }
@@ -147,24 +101,179 @@ async fn handle_webhook(
         }
     };
 
-    // Publish events to event bus
-    for event in events {
-        let event_data = serde_json::to_value(&event.data).unwrap_or_default();
-        if let Err(e) = state.event_bus.publish(&event.topic, event_data).await {
-            tracing::error!("Failed to publish event {}: {}", event.topic, e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to publish event").into_response();
+    // Process webhook events - both trigger new flows AND resume paused runs
+    let mut triggered_count = 0;
+    let mut resumed_count = 0;
+
+    for event in &events {
+        tracing::info!("Processing webhook event: {}", event.topic);
+
+        // Use Case 1: Trigger new workflow executions
+        match trigger_flows_for_event(&state, event).await {
+            Ok(count) => {
+                triggered_count += count;
+                tracing::info!("Event {} triggered {} new flow(s)", event.topic, count);
+            }
+            Err(e) => {
+                tracing::error!("Failed to trigger flows for event {}: {}", event.topic, e);
+                // Continue processing
+            }
         }
-        tracing::info!("Published webhook event: {}", event.topic);
+
+        // Use Case 2: Resume paused workflow executions
+        match resume_paused_runs_for_event(&state, event).await {
+            Ok(count) => {
+                resumed_count += count;
+                tracing::info!("Event {} resumed {} paused run(s)", event.topic, count);
+            }
+            Err(e) => {
+                tracing::error!("Failed to resume runs for event {}: {}", event.topic, e);
+                // Continue processing
+            }
+        }
     }
 
+    tracing::info!(
+        "Webhook processed: {} events, {} new flows triggered, {} runs resumed",
+        events.len(),
+        triggered_count,
+        resumed_count
+    );
+
     (StatusCode::OK, "OK").into_response()
+}
+
+/// Trigger new flow executions for matching deployed flows (Use Case 1)
+async fn trigger_flows_for_event(
+    state: &WebhookManagerState,
+    event: &ParsedEvent,
+) -> Result<usize> {
+    // Fast O(log N) lookup: Query only flow names (not content)
+    let flow_names = state.storage.find_flow_names_by_topic(&event.topic).await?;
+
+    if flow_names.is_empty() {
+        tracing::debug!("No flows registered for topic: {}", event.topic);
+        return Ok(0);
+    }
+
+    let mut triggered = 0;
+
+    // Use engine.start() - same code path as HTTP/CLI/MCP operations
+    for flow_name in flow_names {
+        tracing::info!(
+            "Triggering flow '{}' for webhook topic '{}'",
+            flow_name,
+            event.topic
+        );
+
+        match state
+            .engine
+            .start(&flow_name, event.data.clone(), false)
+            .await
+        {
+            Ok(_) => {
+                triggered += 1;
+                tracing::info!("Successfully triggered flow '{}'", flow_name);
+            }
+            Err(e) => {
+                // Log but don't fail - flow execution errors shouldn't block webhook
+                tracing::error!("Failed to trigger flow '{}': {}", flow_name, e);
+            }
+        }
+    }
+
+    Ok(triggered)
+}
+
+/// Resume paused runs for matching paused workflows (Use Case 2)
+async fn resume_paused_runs_for_event(
+    state: &WebhookManagerState,
+    event: &ParsedEvent,
+) -> Result<usize> {
+    // Query paused runs by source (event topic)
+    let paused_runs = state
+        .storage
+        .find_paused_runs_by_source(&event.topic)
+        .await?;
+
+    if paused_runs.is_empty() {
+        tracing::debug!("No paused runs found for source: {}", event.topic);
+        return Ok(0);
+    }
+
+    tracing::debug!(
+        "Found {} paused run(s) for source: {}",
+        paused_runs.len(),
+        event.topic
+    );
+
+    let mut resumed = 0;
+
+    for (token, paused_data) in paused_runs {
+        // Deserialize paused run
+        let paused: PausedRun = match serde_json::from_value(paused_data) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Failed to deserialize paused run {}: {}", token, e);
+                continue;
+            }
+        };
+
+        // Get await_event spec from the current step
+        let step = match paused.flow.steps.get(paused.step_idx) {
+            Some(s) => s,
+            None => {
+                tracing::error!("Invalid step index {} for token {}", paused.step_idx, token);
+                continue;
+            }
+        };
+
+        let await_spec = match &step.await_event {
+            Some(spec) => spec,
+            None => {
+                tracing::error!(
+                    "Step {} has no await_event spec for token {}",
+                    step.id,
+                    token
+                );
+                continue;
+            }
+        };
+
+        // Check if event matches the await criteria
+        let event_value = serde_json::to_value(&event.data).unwrap_or_default();
+        if !matches_criteria(&event_value, &await_spec.match_) {
+            tracing::debug!(
+                "Event does not match criteria for token {}, skipping",
+                token
+            );
+            continue;
+        }
+
+        // Resume the paused run
+        tracing::info!("Resuming paused run with token: {}", token);
+
+        // Convert event data to HashMap for resume
+        let resume_event = event.data.clone();
+
+        match state.engine.resume(&token, resume_event).await {
+            Ok(_) => {
+                resumed += 1;
+                tracing::info!("Successfully resumed run with token: {}", token);
+            }
+            Err(e) => {
+                tracing::error!("Failed to resume run with token {}: {}", token, e);
+            }
+        }
+    }
+
+    Ok(resumed)
 }
 
 /// Find webhook configuration from registry
 async fn find_webhook_config(
     registry: &Arc<RegistryManager>,
     provider: &str,
-    _path: &str,
 ) -> Option<WebhookConfig> {
     // Query registry for OAuth provider which includes webhook config
     let provider_name = format!("oauth_{}", provider);
@@ -257,7 +366,10 @@ fn verify_webhook_signature(
 }
 
 /// Parse events from webhook payload
-fn parse_webhook_events(config: &WebhookConfig, payload: &Value) -> Result<Vec<ParsedEvent>> {
+pub(crate) fn parse_webhook_events(
+    config: &WebhookConfig,
+    payload: &Value,
+) -> Result<Vec<ParsedEvent>> {
     let mut events = Vec::new();
 
     for event_config in &config.events {
@@ -291,6 +403,21 @@ pub(crate) fn matches_event(payload: &Value, match_conditions: &HashMap<String, 
         }
     }
     true
+}
+
+/// Check if event matches await_event criteria (excluding token field)
+///
+/// This is used by webhook handlers to determine if an incoming event
+/// should resume a paused workflow. The "token" field is excluded from matching
+/// as it's used for identification, not matching.
+fn matches_criteria(payload: &Value, criteria: &HashMap<String, Value>) -> bool {
+    criteria
+        .iter()
+        .filter(|(key, _)| *key != crate::constants::MATCH_KEY_TOKEN)
+        .all(|(key, expected)| {
+            let actual = extract_json_path(payload, key);
+            actual.as_ref() == Some(expected)
+        })
 }
 
 /// Extract value from JSON using dot notation path

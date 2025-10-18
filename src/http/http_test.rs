@@ -259,21 +259,6 @@ async fn test_list_runs() {
 }
 
 #[tokio::test]
-async fn test_publish_event() {
-    let state = create_test_state().await;
-
-    let input = json!({
-        "topic": "test.event",
-        "payload": {
-            "message": "test"
-        }
-    });
-
-    let result = state.registry.execute("publish_event", input).await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
 async fn test_list_tools() {
     let state = create_test_state().await;
     let result = state.registry.execute("list_tools", json!({})).await;

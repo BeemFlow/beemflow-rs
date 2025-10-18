@@ -54,14 +54,11 @@ pub mod engine;
 pub mod graph;
 
 // Infrastructure
+pub mod blob;
 pub mod config;
-pub mod event;
 pub mod registry;
 pub mod secrets;
 pub mod storage;
-// TODO: Refactor cron module to use OperationRegistry
-// pub mod cron;
-pub mod blob;
 pub mod telemetry;
 
 // Interface layers (all delegate to operations)

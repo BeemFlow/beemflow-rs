@@ -125,10 +125,12 @@ pub struct RegistryEntry {
 }
 
 /// Webhook configuration for providers
+///
+/// Webhooks are registered at `/webhooks/{provider}` where provider matches
+/// the OAuth provider name (without the `oauth_` prefix).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookConfig {
     pub enabled: bool,
-    pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

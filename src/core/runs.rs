@@ -3,7 +3,6 @@
 //! All operations for managing flow executions.
 
 use super::*;
-use crate::dsl::parse_string;
 use beemflow_core_macros::{operation, operation_group};
 use schemars::JsonSchema;
 use uuid::Uuid;
@@ -77,41 +76,18 @@ pub mod runs {
         type Output = StartOutput;
 
         async fn execute(&self, input: Self::Input) -> Result<Self::Output> {
-            let event = input.event.unwrap_or_default();
-            let is_draft = input.draft.unwrap_or(false);
+            // Delegate to engine.start() - all loading logic encapsulated there
+            let result = self
+                .deps
+                .engine
+                .start(
+                    &input.flow_name,
+                    input.event.unwrap_or_default(),
+                    input.draft.unwrap_or(false),
+                )
+                .await?;
 
-            // Get flow content
-            let content = if is_draft {
-                // Draft mode: load from filesystem
-                let flows_dir = crate::config::get_flows_dir(&self.deps.config);
-                crate::storage::flows::get_flow(&flows_dir, &input.flow_name)
-                    .await?
-                    .ok_or_else(|| not_found("Flow", &input.flow_name))?
-            } else {
-                // Production mode: load from database (deployed version)
-                let version = self
-                    .deps
-                    .storage
-                    .get_deployed_version(&input.flow_name)
-                    .await?
-                    .ok_or_else(|| {
-                        BeemFlowError::not_found(
-                            "Deployed flow",
-                            format!("{} (use --draft to run from filesystem)", input.flow_name),
-                        )
-                    })?;
-
-                self.deps
-                    .storage
-                    .get_flow_version_content(&input.flow_name, &version)
-                    .await?
-                    .ok_or_else(|| not_found("Flow version", &version))?
-            };
-
-            // Parse and execute flow
-            let flow = parse_string(&content, None)?;
-            let result = self.deps.engine.execute(&flow, event).await?;
-
+            // Format output for API
             Ok(StartOutput {
                 run_id: result.run_id.to_string(),
                 status: "completed".to_string(),

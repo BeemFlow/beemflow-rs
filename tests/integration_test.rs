@@ -739,7 +739,11 @@ steps:
             }),
         )
         .await;
-    assert!(rollback_result.is_ok(), "Should rollback successfully");
+    assert!(
+        rollback_result.is_ok(),
+        "Should rollback successfully: {:?}",
+        rollback_result.err()
+    );
 
     // Verify version 1.0.0 is now deployed
     let version_after = storage.get_deployed_version("rollback_flow").await.unwrap();
@@ -1549,7 +1553,10 @@ steps:
     let engine = Engine::for_testing().await;
 
     // First run - should have no previous data
-    let result1 = engine.execute(&flow, HashMap::new()).await.unwrap();
+    // Pass unique event data to ensure different run IDs without sleep
+    let mut event1 = HashMap::new();
+    event1.insert("run_number".to_string(), serde_json::json!(1));
+    let result1 = engine.execute(&flow, event1).await.unwrap();
     let outputs1 = result1.outputs;
 
     assert!(outputs1.contains_key("check_previous"));
@@ -1565,11 +1572,11 @@ steps:
         text1
     );
 
-    // Small delay to ensure different timestamps (deterministic run ID uses time buckets)
-    tokio::time::sleep(tokio::time::Duration::from_secs(61)).await;
-
     // Second run - should access first run's data via runs.previous
-    let result2 = engine.execute(&flow, HashMap::new()).await.unwrap();
+    // Pass different event data to get a different run ID (no sleep needed)
+    let mut event2 = HashMap::new();
+    event2.insert("run_number".to_string(), serde_json::json!(2));
+    let result2 = engine.execute(&flow, event2).await.unwrap();
     let outputs2 = result2.outputs;
 
     let check_output2: HashMap<String, serde_json::Value> =

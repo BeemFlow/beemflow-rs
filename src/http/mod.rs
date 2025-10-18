@@ -276,9 +276,11 @@ pub async fn start_server(config: Config, interfaces: ServerInterfaces) -> Resul
 
     // Create webhook manager state
     let webhook_state = WebhookManagerState {
-        event_bus: dependencies.event_bus.clone(),
         registry_manager: dependencies.registry_manager.clone(),
         secrets_provider: dependencies.config.create_secrets_provider(),
+        storage: dependencies.storage.clone(),
+        engine: dependencies.engine.clone(),
+        config: dependencies.config.clone(),
     };
 
     // Build router with config for CORS
@@ -358,7 +360,6 @@ fn build_operation_routes(state: &AppState) -> Router {
         crate::core::runs::runs::register_http_routes,
         crate::core::tools::tools::register_http_routes,
         crate::core::mcp::mcp::register_http_routes,
-        crate::core::events::events::register_http_routes,
         crate::core::system::system::register_http_routes,
     ]
     .into_iter()

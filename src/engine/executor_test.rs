@@ -2,7 +2,6 @@ use super::*;
 use crate::adapter::{AdapterRegistry, CoreAdapter};
 use crate::dsl::Templater;
 use crate::engine::Executor;
-use crate::event::EventBus;
 use crate::model::Step;
 use crate::storage::{SqliteStorage, Storage};
 use serde_json::Value;
@@ -27,22 +26,13 @@ async fn setup_executor() -> Executor {
     let adapters = Arc::new(AdapterRegistry::new(registry_manager));
     adapters.register(Arc::new(CoreAdapter::new()));
     let templater = Arc::new(Templater::new());
-    let event_bus: Arc<dyn EventBus> = Arc::new(crate::event::InProcEventBus::new());
     let storage: Arc<dyn Storage> = Arc::new(
         SqliteStorage::new(":memory:")
             .await
             .expect("Failed to create SQLite storage"),
     );
 
-    Executor::new(
-        adapters,
-        templater,
-        event_bus,
-        storage,
-        secrets_provider,
-        None,
-        1000,
-    )
+    Executor::new(adapters, templater, storage, secrets_provider, None, 1000)
 }
 
 #[tokio::test]
@@ -79,7 +69,7 @@ async fn test_parallel_block_execution() {
                     map.insert("text".to_string(), Value::String("Task 1".to_string()));
                     map
                 }),
-                ..Default::default()
+                ..Step::test("default")
             },
             Step {
                 id: "task2".to_string().into(),
@@ -89,10 +79,10 @@ async fn test_parallel_block_execution() {
                     map.insert("text".to_string(), Value::String("Task 2".to_string()));
                     map
                 }),
-                ..Default::default()
+                ..Step::test("default")
             },
         ]),
-        ..Default::default()
+        ..Step::test("default")
     };
 
     let result = executor
@@ -122,16 +112,16 @@ async fn test_parallel_block_with_error() {
                     map.insert("text".to_string(), Value::String("Good".to_string()));
                     map
                 }),
-                ..Default::default()
+                ..Step::test("default")
             },
             Step {
                 id: "bad_task".to_string().into(),
                 use_: Some("nonexistent.adapter".to_string()),
                 with: Some(HashMap::new()),
-                ..Default::default()
+                ..Step::test("default")
             },
         ]),
-        ..Default::default()
+        ..Step::test("default")
     };
 
     let result = executor
@@ -170,9 +160,9 @@ async fn test_foreach_sequential() {
                 );
                 map
             }),
-            ..Default::default()
+            ..Step::test("default")
         }]),
-        ..Default::default()
+        ..Step::test("default")
     };
 
     let result = executor
@@ -214,9 +204,9 @@ async fn test_foreach_parallel() {
                 );
                 map
             }),
-            ..Default::default()
+            ..Step::test("default")
         }]),
-        ..Default::default()
+        ..Step::test("default")
     };
 
     let result = executor
@@ -241,9 +231,9 @@ async fn test_foreach_empty_list() {
             id: "process".to_string().into(),
             use_: Some("core.echo".to_string()),
             with: Some(HashMap::new()),
-            ..Default::default()
+            ..Step::test("default")
         }]),
-        ..Default::default()
+        ..Step::test("default")
     };
 
     let result = executor
@@ -269,7 +259,7 @@ async fn test_retry_logic() {
             attempts: 3,
             delay_sec: 1,
         }),
-        ..Default::default()
+        ..Step::test("default")
     };
 
     let step_ctx = StepContext::new(HashMap::new(), HashMap::new(), HashMap::new());
@@ -299,7 +289,7 @@ async fn test_conditional_skip() {
             );
             map
         }),
-        ..Default::default()
+        ..Step::test("default")
     };
 
     let result = executor
@@ -322,7 +312,7 @@ async fn test_wait_seconds() {
             seconds: Some(1),
             until: None,
         }),
-        ..Default::default()
+        ..Step::test("default")
     };
 
     let start = std::time::Instant::now();

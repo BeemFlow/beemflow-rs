@@ -7,6 +7,68 @@ use crate::model::*;
 use std::collections::HashMap;
 
 // ============================================================================
+// Flow Topic Extraction (used during deployment)
+// ============================================================================
+
+/// Extract webhook topics from flow YAML content for indexing
+///
+/// Parses the flow's `on` trigger field and returns all topic strings.
+/// This is called during deployment to populate the flow_triggers table,
+/// enabling O(log N) webhook routing by topic.
+///
+/// # Performance
+/// This is a cold path operation (deployment only). YAML parsing here is acceptable.
+///
+/// # Returns
+/// - Vector of topic strings if flow has `on:` field
+/// - Empty vector if no triggers or parse error
+pub fn extract_topics_from_flow_yaml(content: &str) -> Vec<String> {
+    let flow = match crate::dsl::parse_string(content, None) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+
+    let Some(trigger) = flow.on else {
+        return Vec::new();
+    };
+
+    match trigger {
+        Trigger::Single(topic) => vec![topic],
+        Trigger::Multiple(topics) => topics,
+        Trigger::Complex(values) => values
+            .iter()
+            .filter_map(|v| {
+                v.as_str().map(String::from).or_else(|| {
+                    v.as_object()
+                        .and_then(|obj| obj.get("event"))
+                        .and_then(|e| e.as_str())
+                        .map(String::from)
+                })
+            })
+            .collect(),
+        Trigger::Raw(value) => {
+            if let Some(arr) = value.as_array() {
+                arr.iter()
+                    .filter_map(|v| {
+                        v.as_str().map(String::from).or_else(|| {
+                            v.as_object()
+                                .and_then(|obj| obj.get("event"))
+                                .and_then(|e| e.as_str())
+                                .map(String::from)
+                        })
+                    })
+                    .collect()
+            } else {
+                value
+                    .as_str()
+                    .map(|s| vec![s.to_string()])
+                    .unwrap_or_default()
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Status Conversions (used by both backends)
 // ============================================================================
 

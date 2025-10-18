@@ -54,13 +54,6 @@ impl FlowName {
         Ok(Self(name))
     }
 
-    /// Create without validation (use with caution)
-    /// Only for internal use when name is already known to be valid
-    #[inline]
-    pub(crate) fn unchecked(name: String) -> Self {
-        Self(name)
-    }
-
     /// Get the raw string value
     #[inline]
     pub fn as_str(&self) -> &str {
@@ -96,7 +89,7 @@ impl AsRef<str> for FlowName {
 
 impl From<String> for FlowName {
     fn from(name: String) -> Self {
-        Self::unchecked(name)
+        Self::new(name).expect("Invalid flow name")
     }
 }
 
@@ -111,6 +104,13 @@ pub struct StepId(String);
 
 impl StepId {
     /// Create a new StepId with validation
+    ///
+    /// Supports both static IDs and template expressions:
+    /// - Static: `"process"`, `"send_email"`, `"step-1"`
+    /// - Templated: `"process_{{ item_index }}"`, `"{{ step.name }}"`
+    ///
+    /// Templates are identified by presence of `{{` and `}}` and allow any characters.
+    /// Static IDs only allow alphanumeric, underscore, and hyphen.
     pub fn new(id: impl Into<String>) -> crate::Result<Self> {
         let id = id.into();
 
@@ -119,22 +119,28 @@ impl StepId {
             return Err(crate::BeemFlowError::validation("Step ID cannot be empty"));
         }
 
-        // Validate characters (alphanumeric, underscore, hyphen)
-        if !id
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-        {
-            return Err(crate::BeemFlowError::validation(format!(
-                "Step ID '{}' contains invalid characters (only alphanumeric, _, - allowed)",
-                id
-            )));
+        // Check if this is a templated ID (contains {{ and }})
+        let is_template = id.contains("{{") && id.contains("}}");
+
+        if !is_template {
+            // Strict validation for static IDs (alphanumeric, underscore, hyphen only)
+            if !id
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            {
+                return Err(crate::BeemFlowError::validation(format!(
+                    "Step ID '{}' contains invalid characters (only alphanumeric, _, - allowed)",
+                    id
+                )));
+            }
         }
+        // Templates allow any characters (validated at template rendering time)
 
         Ok(Self(id))
     }
 
-    /// Create without validation (use with caution)
-    #[inline]
+    /// Create without validation - ONLY FOR TESTING
+    #[cfg(test)]
     pub(crate) fn unchecked(id: String) -> Self {
         Self(id)
     }
@@ -174,7 +180,7 @@ impl AsRef<str> for StepId {
 
 impl From<String> for StepId {
     fn from(id: String) -> Self {
-        Self::unchecked(id)
+        Self::new(id).expect("Invalid step ID")
     }
 }
 
@@ -284,10 +290,29 @@ pub struct Flow {
     pub mcp_servers: Option<HashMap<String, McpServerConfig>>,
 }
 
+impl Flow {
+    /// Create a minimal flow for testing with a valid name
+    #[cfg(test)]
+    pub fn test(name: &str) -> Self {
+        Self {
+            name: FlowName::new(name).expect("Invalid test flow name"),
+            description: None,
+            version: None,
+            on: None,
+            cron: None,
+            vars: None,
+            steps: Vec::new(),
+            catch: None,
+            mcp_servers: None,
+        }
+    }
+}
+
+// Allow Default for struct update syntax in tests, but with validation
 impl Default for Flow {
     fn default() -> Self {
         Self {
-            name: FlowName::unchecked(String::new()),
+            name: FlowName::from("default_flow".to_string()),
             description: None,
             version: None,
             on: None,
@@ -397,10 +422,33 @@ pub struct Step {
     pub wait: Option<WaitSpec>,
 }
 
+impl Step {
+    /// Create a minimal step for testing with a valid id
+    #[cfg(test)]
+    pub fn test(id: &str) -> Self {
+        Self {
+            id: StepId::new(id).expect("Invalid test step ID"),
+            use_: None,
+            with: None,
+            depends_on: None,
+            parallel: None,
+            if_: None,
+            foreach: None,
+            as_: None,
+            do_: None,
+            steps: None,
+            retry: None,
+            await_event: None,
+            wait: None,
+        }
+    }
+}
+
+// Allow Default for struct update syntax in tests, but with validation
 impl Default for Step {
     fn default() -> Self {
         Self {
-            id: StepId::unchecked(String::new()),
+            id: StepId::from("default_step_id".to_string()),
             use_: None,
             with: None,
             depends_on: None,

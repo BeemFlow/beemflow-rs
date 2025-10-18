@@ -3,7 +3,6 @@
 //! This module contains all BeemFlow operations organized by group.
 //! Each operation uses #[operation] and #[operation_group] macros for metadata.
 
-pub mod events;
 pub mod flows;
 pub mod mcp;
 pub mod runs;
@@ -15,7 +14,6 @@ pub mod tools;
 
 use crate::config::Config;
 use crate::engine::Engine;
-use crate::event::EventBus;
 use crate::registry::RegistryManager;
 use crate::storage::Storage;
 use crate::{BeemFlowError, Result};
@@ -31,7 +29,6 @@ pub struct Dependencies {
     pub storage: Arc<dyn Storage>,
     pub engine: Arc<Engine>,
     pub registry_manager: Arc<RegistryManager>,
-    pub event_bus: Arc<dyn EventBus>,
     pub config: Arc<Config>,
 }
 
@@ -90,7 +87,6 @@ impl OperationRegistry {
         [
             flows::flows::register_all,
             runs::runs::register_all,
-            events::events::register_all,
             tools::tools::register_all,
             mcp::mcp::register_all,
             system::system::register_all,
@@ -232,7 +228,6 @@ pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
 
     // Create remaining engine dependencies
     let templater = Arc::new(crate::dsl::Templater::new());
-    let event_bus: Arc<dyn EventBus> = Arc::new(crate::event::InProcEventBus::new());
 
     // Register core adapters (built-in, not from registry)
     adapters.register(Arc::new(crate::adapter::CoreAdapter::new()));
@@ -257,9 +252,9 @@ pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
         adapters,
         mcp_adapter,
         templater,
-        event_bus.clone(),
         storage.clone(),
         secrets_provider.clone(),
+        config.clone(),
         limits.max_concurrent_tasks,
     ));
 
@@ -267,7 +262,6 @@ pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
         storage,
         engine,
         registry_manager,
-        event_bus,
         config,
     })
 }

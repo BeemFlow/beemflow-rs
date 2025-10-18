@@ -708,13 +708,31 @@ async fn test_await_event_resume_roundtrip() {
     assert!(result.is_err(), "Should error/pause at await_event");
     let err_msg = result.unwrap_err().to_string();
     assert!(
-        err_msg.contains("waiting for event") || err_msg.contains("paused"),
-        "Error should indicate paused state, got: {}",
+        err_msg.contains("waiting for event"),
+        "Error should indicate waiting state, got: {}",
         err_msg
     );
 
-    // Give the subscription time to register
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Verify the paused run was stored in database
+    let storage = engine.storage();
+    let paused_runs = storage
+        .load_paused_runs()
+        .await
+        .expect("Should load paused runs");
+    assert_eq!(paused_runs.len(), 1, "Should have one paused run");
+    assert!(
+        paused_runs.contains_key("abc123"),
+        "Should have token abc123"
+    );
+
+    // Verify we can query by source (webhook architecture)
+    // The flow uses source: test (not webhook.test)
+    let source_runs = storage
+        .find_paused_runs_by_source("test")
+        .await
+        .expect("Should query by source");
+    assert_eq!(source_runs.len(), 1, "Should find paused run by source");
+    assert_eq!(source_runs[0].0, "abc123");
 
     // Simulate resume by calling engine.resume() directly
     let mut resume_event = HashMap::new();
@@ -722,15 +740,28 @@ async fn test_await_event_resume_roundtrip() {
     resume_event.insert("token".to_string(), serde_json::json!("abc123"));
 
     // Call resume directly
-    engine
-        .resume("abc123", resume_event.clone())
+    let resume_result = engine.resume("abc123", resume_event.clone()).await;
+    assert!(resume_result.is_ok(), "Resume should succeed");
+
+    // Verify the paused run was deleted after resume
+    let paused_after = storage
+        .load_paused_runs()
         .await
-        .expect("Resume should succeed");
+        .expect("Should load paused runs");
+    assert_eq!(
+        paused_after.len(),
+        0,
+        "Paused run should be removed after resume"
+    );
 
-    // Give resume time to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // NOTE: This test verifies that resume works and doesn't panic
-    // Output verification would require accessing storage directly
-    // or having a different API for checking completion status
+    // Verify source query returns empty after resume
+    let source_after = storage
+        .find_paused_runs_by_source("test")
+        .await
+        .expect("Should query by source");
+    assert_eq!(
+        source_after.len(),
+        0,
+        "Source query should be empty after resume"
+    );
 }

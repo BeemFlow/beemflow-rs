@@ -77,10 +77,22 @@ pub trait StateStorage: Send + Sync {
 
     // Paused run methods
     /// Save a paused run (for await_event)
-    async fn save_paused_run(&self, token: &str, data: serde_json::Value) -> Result<()>;
+    async fn save_paused_run(
+        &self,
+        token: &str,
+        source: &str,
+        data: serde_json::Value,
+    ) -> Result<()>;
 
     /// Load all paused runs
     async fn load_paused_runs(&self) -> Result<HashMap<String, serde_json::Value>>;
+
+    /// Find paused runs by source (for webhook processing)
+    /// Returns list of (token, data) tuples
+    async fn find_paused_runs_by_source(
+        &self,
+        source: &str,
+    ) -> Result<Vec<(String, serde_json::Value)>>;
 
     /// Delete a paused run
     async fn delete_paused_run(&self, token: &str) -> Result<()>;
@@ -128,6 +140,30 @@ pub trait FlowStorage: Send + Sync {
 
     /// Remove deployed version pointer (for disable)
     async fn unset_deployed_version(&self, flow_name: &str) -> Result<()>;
+
+    /// List all currently deployed flows with their content
+    ///
+    /// Returns (flow_name, content) tuples for all flows with active deployment.
+    /// This is efficient as it performs a single JOIN query instead of N+1 queries.
+    /// Used by webhook handlers to find flows to trigger.
+    async fn list_all_deployed_flows(&self) -> Result<Vec<(String, String)>>;
+
+    /// Find deployed flow names by webhook topic (efficient lookup for webhook routing)
+    ///
+    /// Returns only flow names (not content) for flows registered to the given topic.
+    /// This is more efficient when you'll load flows individually using engine.start().
+    ///
+    /// # Performance
+    /// Uses flow_triggers index for O(log N) lookup, scalable to 1000+ flows.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let flow_names = storage.find_flow_names_by_topic("slack.message.received").await?;
+    /// for name in flow_names {
+    ///     engine.start(&name, event, false).await?;
+    /// }
+    /// ```
+    async fn find_flow_names_by_topic(&self, topic: &str) -> Result<Vec<String>>;
 }
 
 /// OAuth storage for credentials, providers, clients, and tokens

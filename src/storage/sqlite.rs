@@ -335,14 +335,20 @@ impl StateStorage for SqliteStorage {
     }
 
     // Paused run methods
-    async fn save_paused_run(&self, token: &str, data: serde_json::Value) -> Result<()> {
+    async fn save_paused_run(
+        &self,
+        token: &str,
+        source: &str,
+        data: serde_json::Value,
+    ) -> Result<()> {
         let data_json = serde_json::to_string(&data)?;
 
         sqlx::query(
-            "INSERT INTO paused_runs (token, data) VALUES (?, ?)
-             ON CONFLICT(token) DO UPDATE SET data = excluded.data",
+            "INSERT INTO paused_runs (token, source, data) VALUES (?, ?, ?)
+             ON CONFLICT(token) DO UPDATE SET source = excluded.source, data = excluded.data",
         )
         .bind(token)
+        .bind(source)
         .bind(data_json)
         .execute(&self.pool)
         .await?;
@@ -361,6 +367,27 @@ impl StateStorage for SqliteStorage {
             let data_json: String = row.try_get("data")?;
             if let Ok(data) = serde_json::from_str(&data_json) {
                 result.insert(token, data);
+            }
+        }
+
+        Ok(result)
+    }
+
+    async fn find_paused_runs_by_source(
+        &self,
+        source: &str,
+    ) -> Result<Vec<(String, serde_json::Value)>> {
+        let rows = sqlx::query("SELECT token, data FROM paused_runs WHERE source = ?")
+            .bind(source)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            let token: String = row.try_get("token")?;
+            let data_json: String = row.try_get("data")?;
+            if let Ok(data) = serde_json::from_str(&data_json) {
+                result.push((token, data));
             }
         }
 
@@ -404,14 +431,31 @@ impl FlowStorage for SqliteStorage {
     ) -> Result<()> {
         let now = Utc::now().timestamp();
 
+        // Parse flow to extract trigger topics
+        let topics = extract_topics_from_flow_yaml(content);
+
         // Start transaction
         let mut tx = self.pool.begin().await?;
 
-        // Save snapshot (idempotent)
+        // Check if this version already exists (enforce version immutability)
+        let exists =
+            sqlx::query("SELECT 1 FROM flow_versions WHERE flow_name = ? AND version = ? LIMIT 1")
+                .bind(flow_name)
+                .bind(version)
+                .fetch_optional(&mut *tx)
+                .await?;
+
+        if exists.is_some() {
+            return Err(BeemFlowError::validation(format!(
+                "Version '{}' already exists for flow '{}'. Versions are immutable - use a new version number.",
+                version, flow_name
+            )));
+        }
+
+        // Save new version snapshot
         sqlx::query(
             "INSERT INTO flow_versions (flow_name, version, content, deployed_at)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(flow_name, version) DO NOTHING",
+             VALUES (?, ?, ?, ?)",
         )
         .bind(flow_name)
         .bind(version)
@@ -433,6 +477,21 @@ impl FlowStorage for SqliteStorage {
         .bind(now)
         .execute(&mut *tx)
         .await?;
+
+        // Insert flow_triggers for this version
+        // Note: No need to delete - version is new (checked above)
+        for topic in topics {
+            sqlx::query(
+                "INSERT INTO flow_triggers (flow_name, version, topic)
+                 VALUES (?, ?, ?)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(flow_name)
+            .bind(version)
+            .bind(&topic)
+            .execute(&mut *tx)
+            .await?;
+        }
 
         tx.commit().await?;
         Ok(())
@@ -534,6 +593,45 @@ impl FlowStorage for SqliteStorage {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn list_all_deployed_flows(&self) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query(
+            "SELECT d.flow_name, v.content
+             FROM deployed_flows d
+             INNER JOIN flow_versions v
+               ON d.flow_name = v.flow_name
+               AND d.deployed_version = v.version",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            let flow_name: String = row.try_get("flow_name")?;
+            let content: String = row.try_get("content")?;
+            result.push((flow_name, content));
+        }
+
+        Ok(result)
+    }
+
+    async fn find_flow_names_by_topic(&self, topic: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT ft.flow_name
+             FROM flow_triggers ft
+             INNER JOIN deployed_flows d ON ft.flow_name = d.flow_name AND ft.version = d.deployed_version
+             WHERE ft.topic = ?
+             ORDER BY ft.flow_name"
+        )
+        .bind(topic)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| row.try_get("flow_name").ok())
+            .collect())
     }
 }
 

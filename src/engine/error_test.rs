@@ -3,7 +3,7 @@
 //! Tests various error scenarios and recovery mechanisms.
 
 use super::*;
-use crate::model::{Flow, RetrySpec, Step};
+use crate::model::{Flow, RetrySpec, Step, StepId};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -240,7 +240,7 @@ async fn test_empty_step_id() {
     let flow = Flow {
         name: "test-flow".to_string().into(),
         steps: vec![Step {
-            id: "".to_string().into(), // Empty ID
+            id: StepId::unchecked("".to_string()), // Empty ID - use unchecked for testing error handling
             use_: Some("core.echo".to_string()),
             with: Some(with),
             ..Default::default()

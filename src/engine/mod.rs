@@ -8,7 +8,6 @@ pub mod executor;
 
 use crate::adapter::AdapterRegistry;
 use crate::dsl::Templater;
-use crate::event::EventBus;
 use crate::storage::Storage;
 use crate::{BeemFlowError, Flow, Result};
 use std::collections::HashMap;
@@ -34,7 +33,6 @@ pub struct PausedRun {
     pub outputs: HashMap<String, serde_json::Value>,
     pub token: String,
     pub run_id: Uuid,
-    pub subscription_id: Uuid, // Event bus subscription ID for cleanup
 }
 
 /// BeemFlow execution engine
@@ -45,9 +43,9 @@ pub struct Engine {
     adapters: Arc<AdapterRegistry>,
     mcp_adapter: Arc<crate::adapter::McpAdapter>,
     templater: Arc<Templater>,
-    event_bus: Arc<dyn EventBus>,
     storage: Arc<dyn Storage>,
     secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
+    config: Arc<crate::config::Config>,
     max_concurrent_tasks: usize,
 }
 
@@ -57,18 +55,18 @@ impl Engine {
         adapters: Arc<AdapterRegistry>,
         mcp_adapter: Arc<crate::adapter::McpAdapter>,
         templater: Arc<Templater>,
-        event_bus: Arc<dyn EventBus>,
         storage: Arc<dyn Storage>,
         secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
+        config: Arc<crate::config::Config>,
         max_concurrent_tasks: usize,
     ) -> Self {
         Self {
             adapters,
             mcp_adapter,
             templater,
-            event_bus,
             storage,
             secrets_provider,
+            config,
             max_concurrent_tasks,
         }
     }
@@ -201,7 +199,6 @@ impl Engine {
         let executor = Executor::new(
             self.adapters.clone(),
             self.templater.clone(),
-            self.event_bus.clone(),
             self.storage.clone(),
             self.secrets_provider.clone(),
             runs_data,
@@ -215,6 +212,82 @@ impl Engine {
         let outputs = self.finalize_execution(flow, event, result, run_id).await?;
 
         Ok(ExecutionResult { run_id, outputs })
+    }
+
+    /// Start a new flow execution by name
+    ///
+    /// This is a high-level method that handles:
+    /// - Loading flow from storage (deployed) or filesystem (draft)
+    /// - Parsing YAML to Flow object
+    /// - Executing the flow
+    ///
+    /// # Parameters
+    /// - `flow_name`: Name of the flow to execute
+    /// - `event`: Event data passed to the flow as {{ event.* }}
+    /// - `is_draft`: If true, load from filesystem; if false, load from deployed_flows
+    ///
+    /// # Returns
+    /// ExecutionResult with run_id and final outputs
+    ///
+    /// # Errors
+    /// - Flow not found (either in filesystem or deployed_flows)
+    /// - YAML parsing errors
+    /// - Execution errors
+    pub async fn start(
+        &self,
+        flow_name: &str,
+        event: HashMap<String, serde_json::Value>,
+        is_draft: bool,
+    ) -> Result<ExecutionResult> {
+        // Load flow content
+        let content = self.load_flow_content(flow_name, is_draft).await?;
+
+        // Parse YAML
+        let flow = crate::dsl::parse_string(&content, None)?;
+
+        // Execute flow (delegate to existing low-level method)
+        self.execute(&flow, event).await
+    }
+
+    /// Load flow content from storage or filesystem
+    ///
+    /// Helper method that encapsulates the draft vs. deployed logic.
+    async fn load_flow_content(&self, flow_name: &str, is_draft: bool) -> Result<String> {
+        if is_draft {
+            // Draft mode: load from filesystem
+            let flows_dir = crate::config::get_flows_dir(&self.config);
+
+            crate::storage::flows::get_flow(&flows_dir, flow_name)
+                .await?
+                .ok_or_else(|| {
+                    crate::BeemFlowError::not_found("Flow", format!("{} (filesystem)", flow_name))
+                })
+        } else {
+            // Production mode: load from deployed_flows
+            let version = self
+                .storage
+                .get_deployed_version(flow_name)
+                .await?
+                .ok_or_else(|| {
+                    crate::BeemFlowError::not_found(
+                        "Deployed flow",
+                        format!(
+                            "{} (not deployed - use --draft to run from filesystem)",
+                            flow_name
+                        ),
+                    )
+                })?;
+
+            self.storage
+                .get_flow_version_content(flow_name, &version)
+                .await?
+                .ok_or_else(|| {
+                    crate::BeemFlowError::not_found(
+                        "Flow version",
+                        format!("{} version {}", flow_name, version),
+                    )
+                })
+        }
     }
 
     /// Resume a paused run
@@ -241,21 +314,6 @@ impl Engine {
         // Deserialize paused run from JSON
         let paused: PausedRun = serde_json::from_value(paused_json)?;
 
-        // Clean up event subscription to prevent memory leak
-        tracing::debug!(
-            "Cleaning up subscription {} for resumed token: {}",
-            paused.subscription_id,
-            token
-        );
-        if let Err(e) = self
-            .event_bus
-            .unsubscribe_by_id(paused.subscription_id)
-            .await
-        {
-            tracing::error!("Failed to cleanup subscription on resume: {}", e);
-            // Continue anyway - this is cleanup, not critical
-        }
-
         // Merge resume event with existing event data and create new context
         let snapshot = paused.context.snapshot();
         let mut merged_event = snapshot.event;
@@ -277,7 +335,6 @@ impl Engine {
         let executor = Executor::new(
             self.adapters.clone(),
             self.templater.clone(),
-            self.event_bus.clone(),
             self.storage.clone(),
             self.secrets_provider.clone(),
             runs_data,
@@ -435,7 +492,6 @@ impl Engine {
         let executor = Executor::new(
             self.adapters.clone(),
             self.templater.clone(),
-            self.event_bus.clone(),
             self.storage.clone(),
             self.secrets_provider.clone(),
             None,
@@ -637,6 +693,9 @@ impl Engine {
         let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
             Arc::new(crate::secrets::EnvSecretsProvider::new());
 
+        // Create minimal config for testing
+        let config = Arc::new(crate::config::Config::default());
+
         // Create registry manager for testing
         let registry_manager = Arc::new(crate::registry::RegistryManager::standard(
             None,
@@ -664,9 +723,9 @@ impl Engine {
             adapters,
             mcp_adapter,
             Arc::new(Templater::new()),
-            Arc::new(crate::event::InProcEventBus::new()),
             Arc::new(storage),
             secrets_provider,
+            config,
             1000, // Default max concurrent tasks for testing
         )
     }
