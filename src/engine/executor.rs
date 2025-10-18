@@ -143,6 +143,7 @@ pub struct Executor {
     templater: Arc<Templater>,
     storage: Arc<dyn Storage>,
     secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
+    oauth_client: Arc<crate::auth::OAuthClientManager>,
     runs_data: Option<HashMap<String, Value>>,
     max_concurrent_tasks: usize,
 }
@@ -154,6 +155,7 @@ impl Executor {
         templater: Arc<Templater>,
         storage: Arc<dyn Storage>,
         secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
+        oauth_client: Arc<crate::auth::OAuthClientManager>,
         runs_data: Option<HashMap<String, Value>>,
         max_concurrent_tasks: usize,
     ) -> Self {
@@ -162,6 +164,7 @@ impl Executor {
             templater,
             storage,
             secrets_provider,
+            oauth_client,
             runs_data,
             max_concurrent_tasks,
         }
@@ -308,6 +311,7 @@ impl Executor {
             let runs_data = self.runs_data.clone();
             let storage = self.storage.clone();
             let secrets_provider = self.secrets_provider.clone();
+            let oauth_client = self.oauth_client.clone();
             let permit = semaphore.clone().acquire_owned().await.map_err(|e| {
                 BeemFlowError::adapter(format!("Failed to acquire semaphore: {}", e))
             })?;
@@ -323,8 +327,11 @@ impl Executor {
                     add_special_use_param(&mut inputs, use_);
 
                     // Create execution context for OAuth and secrets expansion
-                    let exec_ctx =
-                        crate::adapter::ExecutionContext::new(storage, secrets_provider.clone());
+                    let exec_ctx = crate::adapter::ExecutionContext::new(
+                        storage,
+                        secrets_provider.clone(),
+                        oauth_client.clone(),
+                    );
 
                     let outputs = adapter.execute(inputs, &exec_ctx).await?;
                     step_ctx_clone.set_output(child.id.to_string(), serde_json::to_value(outputs)?);
@@ -480,6 +487,7 @@ impl Executor {
             let runs_data = self.runs_data.clone();
             let storage = self.storage.clone();
             let secrets_provider = self.secrets_provider.clone();
+            let oauth_client = self.oauth_client.clone();
             let permit = semaphore.clone().acquire_owned().await.map_err(|e| {
                 BeemFlowError::adapter(format!("Failed to acquire semaphore: {}", e))
             })?;
@@ -498,8 +506,11 @@ impl Executor {
                     .for_each(|(k, v)| iter_ctx.set_output(k, v));
 
                 // Create execution context for OAuth expansion
-                let exec_ctx =
-                    crate::adapter::ExecutionContext::new(storage, secrets_provider.clone());
+                let exec_ctx = crate::adapter::ExecutionContext::new(
+                    storage,
+                    secrets_provider.clone(),
+                    oauth_client.clone(),
+                );
 
                 // Execute steps - simple tool calls only in parallel foreach
                 for inner_step in &do_steps {
@@ -567,6 +578,7 @@ impl Executor {
         let ctx = crate::adapter::ExecutionContext::new(
             self.storage.clone(),
             self.secrets_provider.clone(),
+            self.oauth_client.clone(),
         );
 
         // Execute with retry if configured

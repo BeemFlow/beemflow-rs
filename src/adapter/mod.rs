@@ -105,12 +105,10 @@ use std::sync::Arc;
 /// ```
 #[derive(Clone)]
 pub struct ExecutionContext {
-    /// Storage backend for looking up OAuth credentials, secrets, etc.
+    /// Storage backend for general data access
     ///
-    /// Currently used by HttpAdapter for OAuth token expansion:
-    /// - Tool manifest specifies: `Authorization: $oauth:github:default`
-    /// - HttpAdapter calls: `ctx.storage.get_oauth_credential("github", "default")`
-    /// - Token is injected into request headers automatically
+    /// Note: OAuth token retrieval during execution should use oauth_client instead,
+    /// which handles automatic token refresh.
     pub storage: Arc<dyn Storage>,
 
     /// Secrets provider for environment variable and secret access
@@ -120,6 +118,14 @@ pub struct ExecutionContext {
     /// - HttpAdapter calls: `ctx.secrets_provider.get_secret("API_KEY")`
     /// - Secret value is injected into request headers automatically
     pub secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
+
+    /// OAuth client manager for token management with automatic refresh
+    ///
+    /// Used by HttpAdapter for OAuth token expansion with automatic refresh:
+    /// - Tool manifest specifies: `Authorization: $oauth:github:default`
+    /// - HttpAdapter calls: `ctx.oauth_client.get_token("github", "default")`
+    /// - Token is automatically refreshed if expired and injected into request headers
+    pub oauth_client: Arc<crate::auth::OAuthClientManager>,
     // Future fields will be added here as needed without breaking changes
 }
 
@@ -128,10 +134,12 @@ impl ExecutionContext {
     pub fn new(
         storage: Arc<dyn Storage>,
         secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
+        oauth_client: Arc<crate::auth::OAuthClientManager>,
     ) -> Self {
         Self {
             storage,
             secrets_provider,
+            oauth_client,
         }
     }
 }

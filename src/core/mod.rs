@@ -30,6 +30,7 @@ pub struct Dependencies {
     pub engine: Arc<Engine>,
     pub registry_manager: Arc<RegistryManager>,
     pub config: Arc<Config>,
+    pub oauth_client: Arc<crate::auth::OAuthClientManager>,
 }
 
 /// Metadata for an operation (HTTP routes, CLI patterns, etc.)
@@ -247,6 +248,13 @@ pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
     // Get limits from config
     let limits = config.get_limits();
 
+    // Create OAuth client manager with redirect URI from config
+    let oauth_client = Arc::new(crate::auth::OAuthClientManager::new(
+        storage.clone(),
+        registry_manager.clone(),
+        config.oauth_redirect_uri(),
+    )?);
+
     // Create engine with shared storage and secrets provider
     let engine = Arc::new(Engine::new(
         adapters,
@@ -255,6 +263,7 @@ pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
         storage.clone(),
         secrets_provider.clone(),
         config.clone(),
+        oauth_client.clone(),
         limits.max_concurrent_tasks,
     ));
 
@@ -263,5 +272,6 @@ pub async fn create_dependencies(config: &Config) -> Result<Dependencies> {
         engine,
         registry_manager,
         config,
+        oauth_client,
     })
 }

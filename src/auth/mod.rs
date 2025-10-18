@@ -9,7 +9,7 @@ pub mod client;
 pub mod middleware;
 pub mod server;
 
-pub use client::OAuthClientManager;
+pub use client::{OAuthClientManager, create_test_oauth_client};
 pub use middleware::{
     AuthenticatedUser, OAuthMiddlewareState, RequiredScopes, has_all_scopes, has_any_scope,
     has_scope, oauth_middleware, rate_limit_middleware, validate_token,

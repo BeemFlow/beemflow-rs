@@ -122,6 +122,15 @@ impl TestEnvironment {
         )
         .await;
 
+        // Create registry manager for shared use
+        let registry_manager = Arc::new(crate::registry::RegistryManager::standard(
+            None,
+            secrets_provider.clone(),
+        ));
+
+        // Create OAuth client manager with test redirect URI
+        let oauth_client = crate::auth::create_test_oauth_client(storage.clone(), secrets_provider.clone());
+
         // Create engine with test environment config and storage
         let engine = Arc::new(crate::engine::Engine::new(
             adapters,
@@ -130,17 +139,16 @@ impl TestEnvironment {
             storage.clone(),
             secrets_provider.clone(),
             config.clone(),
+            oauth_client.clone(),
             1000, // max_concurrent_tasks
         ));
 
         let deps = crate::core::Dependencies {
             storage,
             engine: engine.clone(),
-            registry_manager: Arc::new(crate::registry::RegistryManager::standard(
-                None,
-                secrets_provider.clone(),
-            )),
+            registry_manager,
             config,
+            oauth_client,
         };
 
         TestEnvironment {

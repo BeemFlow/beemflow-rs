@@ -432,6 +432,30 @@ impl OAuthClientManager {
 }
 
 // ============================================================================
+// TEST UTILITIES
+// ============================================================================
+
+/// Create OAuth client manager for testing
+///
+/// Helper function to reduce boilerplate when creating OAuthClientManager instances
+/// in tests and test helpers (Engine::for_testing, TestEnvironment, etc).
+/// Uses standard test configuration with localhost:3000 redirect URI.
+pub fn create_test_oauth_client(
+    storage: Arc<dyn Storage>,
+    secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
+) -> Arc<OAuthClientManager> {
+    let registry_manager = Arc::new(RegistryManager::standard(None, secrets_provider));
+    Arc::new(
+        OAuthClientManager::new(
+            storage,
+            registry_manager,
+            "http://localhost:3000/oauth/callback".to_string(),
+        )
+        .expect("Failed to create OAuth client manager for testing"),
+    )
+}
+
+// ============================================================================
 // OAUTH CLIENT ROUTES (UI and API for connecting TO providers)
 // ============================================================================
 

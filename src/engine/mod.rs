@@ -46,6 +46,7 @@ pub struct Engine {
     storage: Arc<dyn Storage>,
     secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
     config: Arc<crate::config::Config>,
+    oauth_client: Arc<crate::auth::OAuthClientManager>,
     max_concurrent_tasks: usize,
 }
 
@@ -58,6 +59,7 @@ impl Engine {
         storage: Arc<dyn Storage>,
         secrets_provider: Arc<dyn crate::secrets::SecretsProvider>,
         config: Arc<crate::config::Config>,
+        oauth_client: Arc<crate::auth::OAuthClientManager>,
         max_concurrent_tasks: usize,
     ) -> Self {
         Self {
@@ -67,6 +69,7 @@ impl Engine {
             storage,
             secrets_provider,
             config,
+            oauth_client,
             max_concurrent_tasks,
         }
     }
@@ -201,6 +204,7 @@ impl Engine {
             self.templater.clone(),
             self.storage.clone(),
             self.secrets_provider.clone(),
+            self.oauth_client.clone(),
             runs_data,
             self.max_concurrent_tasks,
         );
@@ -337,6 +341,7 @@ impl Engine {
             self.templater.clone(),
             self.storage.clone(),
             self.secrets_provider.clone(),
+            self.oauth_client.clone(),
             runs_data,
             self.max_concurrent_tasks,
         );
@@ -494,6 +499,7 @@ impl Engine {
             self.templater.clone(),
             self.storage.clone(),
             self.secrets_provider.clone(),
+            self.oauth_client.clone(),
             None,
             self.max_concurrent_tasks,
         );
@@ -719,13 +725,23 @@ impl Engine {
         // Load tools and MCP servers from default registry
         Self::load_default_registry_tools(&adapters, &mcp_adapter, &secrets_provider).await;
 
+        // Wrap storage in Arc first for sharing between engine and oauth_client
+        let storage_arc = Arc::new(storage);
+
+        // Create OAuth client manager with test redirect URI
+        let oauth_client = crate::auth::create_test_oauth_client(
+            storage_arc.clone(),
+            secrets_provider.clone(),
+        );
+
         Self::new(
             adapters,
             mcp_adapter,
             Arc::new(Templater::new()),
-            Arc::new(storage),
+            storage_arc,
             secrets_provider,
             config,
+            oauth_client,
             1000, // Default max concurrent tasks for testing
         )
     }

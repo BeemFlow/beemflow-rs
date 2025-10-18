@@ -14,8 +14,9 @@ async fn test_context() -> ExecutionContext {
     );
     let secrets_provider: Arc<dyn crate::secrets::SecretsProvider> =
         Arc::new(crate::secrets::EnvSecretsProvider::new());
+    let oauth_client = crate::auth::create_test_oauth_client(storage.clone(), secrets_provider.clone());
 
-    ExecutionContext::new(storage, secrets_provider)
+    ExecutionContext::new(storage, secrets_provider, oauth_client)
 }
 
 // Helper to create test secrets provider

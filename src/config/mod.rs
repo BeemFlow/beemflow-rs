@@ -461,6 +461,31 @@ impl Config {
         self.limits.clone().unwrap_or_default()
     }
 
+    /// Get OAuth redirect URI from HTTP config
+    ///
+    /// Priority order:
+    /// 1. Use public_url if explicitly configured (production deployments)
+    /// 2. Auto-detect localhost when binding to 0.0.0.0 (local development)
+    /// 3. Fall back to http://host:port (direct binding)
+    /// 4. Default to localhost:3000 if no HTTP config present
+    pub fn oauth_redirect_uri(&self) -> String {
+        self.http
+            .as_ref()
+            .and_then(|http| {
+                http.public_url
+                    .as_ref()
+                    .map(|url| format!("{}/oauth/callback", url.trim_end_matches('/')))
+                    .or_else(|| {
+                        Some(if http.host == "0.0.0.0" {
+                            format!("http://localhost:{}/oauth/callback", http.port)
+                        } else {
+                            format!("http://{}:{}/oauth/callback", http.host, http.port)
+                        })
+                    })
+            })
+            .unwrap_or_else(|| "http://localhost:3000/oauth/callback".to_string())
+    }
+
     /// Create a secrets provider based on configuration
     ///
     /// Returns the appropriate SecretsProvider implementation based on the

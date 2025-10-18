@@ -49,8 +49,8 @@ impl HttpAdapter {
             self.build_from_inputs(&inputs)?
         };
 
-        // Expand OAuth tokens in headers using storage from context
-        self.expand_oauth_in_headers(&mut headers, &ctx.storage)
+        // Expand OAuth tokens in headers with automatic refresh
+        self.expand_oauth_in_headers(&mut headers, &ctx.oauth_client)
             .await;
 
         // Create request
@@ -223,10 +223,10 @@ impl HttpAdapter {
         Ok(expanded.trim().to_string())
     }
 
-    /// Expand OAuth tokens in headers at execution time
+    /// Expand OAuth tokens in headers at execution time with automatic refresh
     ///
     /// Searches for headers with `$oauth:provider:integration` placeholders and replaces
-    /// them with actual OAuth access tokens from storage. For example:
+    /// them with actual OAuth access tokens, automatically refreshing expired tokens. For example:
     ///
     /// ```text
     /// Authorization: $oauth:github:default
@@ -239,11 +239,11 @@ impl HttpAdapter {
     /// ```
     ///
     /// This allows registry tool definitions to specify OAuth requirements without
-    /// hardcoding credentials.
+    /// hardcoding credentials. Tokens are automatically refreshed if expired (with 5-minute buffer).
     async fn expand_oauth_in_headers(
         &self,
         headers: &mut HashMap<String, String>,
-        storage: &Arc<dyn crate::storage::Storage>,
+        oauth_client: &Arc<crate::auth::OAuthClientManager>,
     ) {
         let oauth_headers: Vec<_> = headers
             .iter()
@@ -252,51 +252,35 @@ impl HttpAdapter {
             .collect();
 
         for (key, value) in oauth_headers {
-            if let Some(token) = self.expand_oauth_token(&value, storage).await {
+            if let Some(token) = self.expand_oauth_token(&value, oauth_client).await {
                 headers.insert(key, format!("Bearer {}", token));
             }
         }
     }
 
-    /// Expand a single OAuth token reference ($oauth:provider:integration)
+    /// Expand a single OAuth token reference with automatic refresh
     ///
-    /// Parses the OAuth reference, looks up the credential from storage, and returns
-    /// the access token. Warns about expired tokens but still returns them (the API
-    /// provider may still accept them or return a proper error).
+    /// Parses the OAuth reference and uses OAuthClientManager.get_token() which:
+    /// - Checks if the token is expired (with 5-minute buffer)
+    /// - Automatically refreshes the token using the refresh token if needed
+    /// - Updates storage with the new access token
+    /// - Returns the valid (possibly refreshed) access token
+    ///
+    /// This ensures OAuth API calls always use fresh tokens without manual intervention.
     async fn expand_oauth_token(
         &self,
         value: &str,
-        storage: &Arc<dyn crate::storage::Storage>,
+        oauth_client: &Arc<crate::auth::OAuthClientManager>,
     ) -> Option<String> {
         let oauth_ref = value.trim_start_matches("$oauth:");
         let mut parts = oauth_ref.split(':');
         let (provider, integration) = (parts.next()?, parts.next()?);
 
-        match storage.get_oauth_credential(provider, integration).await {
-            Ok(Some(cred)) => {
-                if cred
-                    .expires_at
-                    .is_some_and(|exp| chrono::Utc::now() + chrono::Duration::minutes(5) >= exp)
-                {
-                    tracing::warn!(
-                        "OAuth token for {}:{} is expired. Consider refreshing.",
-                        provider,
-                        integration
-                    );
-                }
-                Some(cred.access_token)
-            }
-            Ok(None) => {
-                tracing::warn!(
-                    "OAuth credential not found for {}:{}",
-                    provider,
-                    integration
-                );
-                None
-            }
+        match oauth_client.get_token(provider, integration).await {
+            Ok(token) => Some(token),
             Err(e) => {
-                tracing::warn!(
-                    "Failed to get OAuth credential for {}:{} - {}",
+                tracing::error!(
+                    "Failed to get OAuth token for {}:{} - {}",
                     provider,
                     integration,
                     e

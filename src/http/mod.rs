@@ -226,25 +226,6 @@ pub async fn start_server(config: Config, interfaces: ServerInterfaces) -> Resul
     // Create session store
     let session_store = Arc::new(session::SessionStore::new());
 
-    // Create OAuth client manager with redirect URI
-    // Priority order:
-    // 1. Use public_url if explicitly configured (production deployments)
-    // 2. Auto-detect localhost when binding to 0.0.0.0 (local development)
-    // 3. Fall back to http://host:port (direct binding)
-    let base_url = match &http_config.public_url {
-        Some(url) => url.trim_end_matches('/').to_string(),
-        None if http_config.host == "0.0.0.0" => {
-            format!("http://localhost:{}", http_config.port)
-        }
-        None => format!("http://{}:{}", http_config.host, http_config.port),
-    };
-    let redirect_uri = format!("{}/oauth/callback", base_url);
-    let oauth_client = Arc::new(crate::auth::OAuthClientManager::new(
-        dependencies.storage.clone(),
-        dependencies.registry_manager.clone(),
-        redirect_uri,
-    )?);
-
     // Initialize template renderer
     let mut template_renderer = template::TemplateRenderer::new("static");
     template_renderer.load_oauth_templates().await?;
@@ -253,7 +234,7 @@ pub async fn start_server(config: Config, interfaces: ServerInterfaces) -> Resul
     let state = AppState {
         registry,
         session_store: session_store.clone(),
-        oauth_client,
+        oauth_client: dependencies.oauth_client.clone(),
         storage: dependencies.storage.clone(),
         template_renderer,
     };
